@@ -1,9 +1,9 @@
 {% if book_of_week %}
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+<div style="border:1px solid #292929;border-radius:var(--radius);
             padding:16px 20px;margin-bottom:32px;display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
   <div style="flex:1;min-width:200px">
-    <p style="font-size:10px;font-weight:700;color:var(--ghost);text-transform:uppercase;
-               letter-spacing:.07em;margin-bottom:8px">⭐ Книга недели</p>
+    <p style="font-size:14px;font-weight:700;color:var(--ghost);text-transform:uppercase;
+               letter-spacing:.07em;margin-bottom:8px;font-family:'Mltsvfont'">Книга недели</p>
     <a href="{% url 'book_detail' book_of_week.pk %}" class="lnk"
        style="font-size:17px;font-weight:700;display:block;margin-bottom:4px">{{ book_of_week.title }}</a>
     <p style="font-size:13px;color:var(--muted);margin-bottom:8px">

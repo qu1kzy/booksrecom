@@ -34,7 +34,7 @@
   </div>
   {% if ul.books.all %}
     {% for book in ul.books.all %}
-    <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
+    <div style="display:flex;align-items:center;gap:12px;padding:8px 0;">
       <a href="{% url 'book_detail' book.id %}" class="lnk" style="font-size:13px;font-weight:500;flex:1">{{ book.title }}</a>
       <span style="font-size:12px;color:var(--muted)">
         {% for a in book.authors.all %}{{ a.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
