@@ -19,6 +19,7 @@ __pycache__/
 *.pyo
 *.pyd
 *.env
+.env
 .env/
 venv/
 venv.bak/
