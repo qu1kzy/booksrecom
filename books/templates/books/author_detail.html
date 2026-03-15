@@ -15,12 +15,17 @@
 
   {# Полоска режима редактирования #}
   {% if user.is_staff %}
-  <div x-show="editing" x-cloak
-       style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 14px;
-              background:#fffbeb;border:1px solid #fcd34d;border-radius:8px">
-    <span style="font-size:13px;color:#92400e;flex:1">✏ Режим редактирования</span>
-    <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
+  <div x-show="editing" x-cloak>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 14px;
+              border:1px solid #292929;border-radius:8px">
+    <span style="font-size:13px;color:#000000;flex:1">✏ Режим редактирования</span>
+      <div>
+            <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
     <button type="button" @click="editing=false" class="btn btn-secondary btn-sm">Отмена</button>
+      </div>
+
+    </div>
+
   </div>
   {% endif %}
 
