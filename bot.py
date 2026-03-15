@@ -97,7 +97,7 @@ def handle(update: dict):
         profile.save(update_fields=["telegram_chat_id"])
 
         send(chat_id,
-             f"✅ <b>Готово!</b> Аккаунт @{username} привязан к Строкау.\n\n"
+             f"✅ <b>Готово!</b> Аккаунт @{username} привязан к Строке.\n\n"
              "Теперь вы будете получать уведомления о новых книгах авторов, "
              "на которых подписаны.")
         logger.info("Linked @%s → chat_id %s", username, chat_id)
@@ -130,6 +130,7 @@ def handle(update: dict):
 
 def main():
     global OFFSET
+    logger.warning(f'my-token: {TOKEN}')
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN не задан в .env")
         sys.exit(1)

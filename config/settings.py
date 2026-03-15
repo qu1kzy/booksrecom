@@ -114,6 +114,7 @@ SITE_URL = os.getenv("SITE_URL", "http://localhost:8000")
 
 # Telegram Bot
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+print(f'tg: {TELEGRAM_BOT_TOKEN}')
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")  # без @
 
 # Google reCAPTCHA v2

@@ -19,6 +19,7 @@ API = "https://api.telegram.org/bot{token}/{method}"
 
 def _call(method: str, **params) -> dict | None:
     token = settings.TELEGRAM_BOT_TOKEN
+
     if not token:
         logger.warning("TELEGRAM_BOT_TOKEN не задан, уведомление пропущено")
         return None
