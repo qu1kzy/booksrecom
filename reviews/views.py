@@ -41,12 +41,11 @@ def review_moderate(request, review_id):
         extract_tag_for_review.delay(review.pk)
 
     elif action == "reject":
-        review.status = Review.REJECTED
-        review.save(update_fields=["status"])
 
         # Декрементируем тег если он уже был извлечён (повторное модерирование)
         if review.extracted_tag:
             review._extracted_tag = review.extracted_tag
             decrement_tag_from_review(review)
+        review.delete()
 
     return HttpResponse("")

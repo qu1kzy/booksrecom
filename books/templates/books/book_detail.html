@@ -100,7 +100,6 @@
                   border:1px solid var(--border);background:var(--surface);
                   display:flex;flex-direction:column;align-items:center;
                   justify-content:center;gap:8px;color:var(--ghost)">
-        <span style="font-size:32px">📖</span>
         <span style="font-size:10px;text-align:center;padding:0 8px;line-height:1.4">Нет обложки</span>
       </div>
       {% endif %}
@@ -240,7 +239,7 @@
           <div>
             <label class="form-label">Год публикации</label>
             <input class="form-input" type="number" name="publication_year"
-                   value="{{ book.publication_year|default:'' }}" min="1000" max="2100" placeholder="2024">
+                   value="{{ book.publication_year|default:'' }}" max="2100" placeholder="2024">
           </div>
           <div>
             <label class="form-label">Страниц</label>
