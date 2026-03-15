@@ -1,5 +1,5 @@
 {# Форма с reCAPTCHA перед запросом цены #}
-<div id="price-block-{{ book.id }}">
+<div id="price-block-{{ book.id }}" style="margin-left:auto">
   <form hx-post="{% url 'request_price' book.id %}"
         hx-target="#price-block-{{ book.id }}"
         hx-swap="outerHTML"
