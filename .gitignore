@@ -11,7 +11,32 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 package-lock.json
+
 yarn.lock
+
+# Игнорировать папки __pycache__ во всех местах
+__pycache__/
+**/__pycache__/
+
+# Игнорировать файлы pyc
+*.pyc
+*.pyo
+*.pyd
+
+# Игнорировать папки среды виртуального окружения
+env/
+venv/
+ENV/
+VENV/
+
+# Игнорировать файлы настроек IDE
+.idea/
+.vscode/
+*.iml
+
+# Игнорировать другие временные файлы
+*.log
+*.sqlite3
 
 # Python
 __pycache__/
