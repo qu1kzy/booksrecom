@@ -1,0 +1,50 @@
+{% for ul in lists %}
+<div style="margin-bottom:24px">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+    <h3 style="font-size:15px">{{ ul.name }}</h3>
+    {% if ul.is_default %}<span class="badge badge-default">По умолчанию</span>{% endif %}
+    {% if ul.sentiment_tag == "positive" %}
+      <span style="font-size:11px;background:#dcfce7;color:#166534;padding:2px 8px;border-radius:999px">👍</span>
+    {% elif ul.sentiment_tag == "negative" %}
+      <span style="font-size:11px;background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:999px">👎</span>
+    {% elif ul.sentiment_tag == "wishlist" %}
+      <span style="font-size:11px;background:#eff6ff;color:#1d4ed8;padding:2px 8px;border-radius:999px">📖</span>
+    {% endif %}
+    <span style="font-size:12px;color:var(--ghost)">{{ ul.books.count }} книг</span>
+    <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+      <button class="btn btn-ghost btn-sm"
+              title="{% if ul.is_public %}Сделать приватным{% else %}Сделать публичным{% endif %}"
+              hx-post="{% url 'toggle_list_public' ul.id %}"
+              hx-target="#lists-panel"
+              hx-swap="innerHTML"
+              hx-headers='{"X-CSRFToken":"{{ csrf_token }}"}'>
+        {% if ul.is_public %}🔓 Публичный{% else %}🔒 Приватный{% endif %}
+      </button>
+      {% if not ul.is_default %}
+      <button class="btn btn-ghost btn-sm" style="color:var(--err)"
+              hx-post="{% url 'delete_list' ul.id %}"
+              hx-target="#lists-panel"
+              hx-swap="innerHTML"
+              hx-confirm="Удалить список «{{ ul.name }}»?"
+              hx-headers='{"X-CSRFToken":"{{ csrf_token }}"}'>
+        Удалить
+      </button>
+      {% endif %}
+    </div>
+  </div>
+  {% if ul.books.all %}
+    {% for book in ul.books.all %}
+    <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <a href="{% url 'book_detail' book.id %}" class="lnk" style="font-size:13px;font-weight:500;flex:1">{{ book.title }}</a>
+      <span style="font-size:12px;color:var(--muted)">
+        {% for a in book.authors.all %}{{ a.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+      </span>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="empty">Список пуст</p>
+  {% endif %}
+</div>
+{% empty %}
+<p class="empty">Списков нет</p>
+{% endfor %}

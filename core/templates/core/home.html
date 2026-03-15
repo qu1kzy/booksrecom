@@ -1,0 +1,47 @@
+{% extends "core/base.html" %}
+{% block title %}Книгополис — каталог книг{% endblock %}
+
+{% block content %}
+<div class="wrap page" style="padding-top:40px">
+
+  {# ── ПОИСК ──────────────────────────────────────────────────────────────── #}
+  <div style="max-width:520px;margin:0 auto 48px">
+    <h1 style="font-size:28px;text-align:center;margin-bottom:20px">Найти книгу</h1>
+    <form method="get" action="{% url 'search' %}" id="search-form">
+      <div style="position:relative">
+        <input class="form-input form-input--search"
+               type="text" name="q"
+               placeholder="Название, автор, жанр, описание..."
+               value="{{ query|default:'' }}"
+               autocomplete="off" autofocus
+               hx-get="{% url 'search' %}"
+               hx-trigger="input changed delay:400ms, search"
+               hx-target="#search-results"
+               hx-swap="innerHTML"
+               hx-include="#search-form"
+               hx-indicator="#search-spinner">
+        <span id="search-spinner" class="htmx-indicator"
+              style="position:absolute;right:12px;top:50%;transform:translateY(-50%)">
+          <span class="spinner"></span>
+        </span>
+      </div>
+    </form>
+  </div>
+
+  {# ── РЕЗУЛЬТАТЫ / СЕКЦИИ ─────────────────────────────────────────────────── #}
+  <div id="search-results">
+    {% if query %}
+      {% include "search/_results.html" %}
+    {% else %}
+      {% include "core/_home_sections.html" %}
+    {% endif %}
+  </div>
+
+</div>
+
+{# ── ОНБОРДИНГ-МОДАЛ (только авторизованным при первом входе) ─────────────── #}
+{% if user.is_authenticated and not user.profile.onboarding_done %}
+{% include "core/_onboarding_modal.html" %}
+{% endif %}
+
+{% endblock %}

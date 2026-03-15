@@ -1,0 +1,31 @@
+from django.urls import path
+from . import views, author_views
+
+urlpatterns = [
+    path("",                                        views.catalog,                    name="catalog"),
+    path("<int:pk>/",                               views.book_detail,                name="book_detail"),
+    path("toggle-list/",                            views.toggle_list,                name="toggle_list"),
+    path("<int:pk>/request-price/",                 views.request_price,              name="request_price"),
+    path("<int:pk>/price-status/",                  views.price_status,               name="price_status"),
+    path("<int:pk>/price-chart/",                   views.price_chart_data,           name="price_chart_data"),
+    path("<int:pk>/price-alert/save/",              views.price_alert_save,           name="price_alert_save"),
+    path("<int:pk>/price-alert/delete/",            views.price_alert_delete,         name="price_alert_delete"),
+    path("<int:book_id>/store-link/save/",          views.store_link_save,            name="store_link_save"),
+    path("<int:book_id>/store-link/<int:store_id>/delete/",
+                                                    views.store_link_delete,          name="store_link_delete"),
+    path("<int:pk>/progress/",                      views.reading_progress_save,      name="reading_progress_save"),
+    path("<int:pk>/quotes/",                        views.quotes_partial,             name="quotes_partial"),
+    path("<int:pk>/quotes/add/",                    views.quote_add,                  name="quote_add"),
+    path("<int:pk>/quotes/<int:quote_pk>/delete/",  views.quote_delete,               name="quote_delete"),
+    path("admin/delete/<int:pk>/",                  views.admin_delete_book,          name="admin_delete_book"),
+    path("admin/partial/",                          views.admin_books_partial,        name="admin_books_partial"),
+    path("add/",                                    views.book_add,                   name="book_add"),
+    path("add/author/",                             views.author_create_inline,       name="author_create_inline"),
+    path("add/genre/",                              views.genre_create_inline,        name="genre_create_inline"),
+    path("add/publisher/",                          views.publisher_create_inline,    name="publisher_create_inline"),
+    path("add/series/",                             views.series_create_inline,       name="series_create_inline"),
+    path("<int:pk>/edit/",                          views.book_edit,                  name="book_edit"),
+    path("authors/<int:pk>/",                       author_views.author_detail,       name="author_detail"),
+    path("authors/<int:pk>/edit/",                  author_views.author_edit,         name="author_edit"),
+    path("authors/<int:pk>/subscribe/",             author_views.toggle_author_subscription, name="author_subscribe"),
+]

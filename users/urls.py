@@ -1,0 +1,24 @@
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path("register/",                               views.register,              name="register"),
+    path("login/",                                  views.user_login,            name="login"),
+    path("logout/",                                 views.user_logout,           name="logout"),
+    path("profile/",                                views.profile,               name="profile"),
+    path("telegram/save/",                          views.save_telegram,         name="save_telegram"),
+    path("lists/create/",                           views.create_list,           name="create_list"),
+    path("lists/<int:list_id>/delete/",             views.delete_list,           name="delete_list"),
+    path("lists/<int:list_id>/toggle-public/",      views.toggle_list_public,    name="toggle_list_public"),
+    path("lists/public/",                           views.public_lists,          name="public_lists"),
+    path("lists/export/",                           views.export_lists,          name="export_lists"),
+    path("onboarding/",                             views.onboarding,            name="onboarding"),
+    path("ai-recs/refresh/",                        views.ai_recs_refresh,       name="ai_recs_refresh"),
+    path("ai-recs/status/",                         views.ai_recs_status,        name="ai_recs_status"),
+    path("admin-panel/",                            views.admin_panel,           name="admin_panel"),
+    path("admin-panel/users/partial/",              views.admin_users_partial,   name="admin_users_partial"),
+    path("admin-panel/users/<int:user_id>/block/",   views.admin_block_user,     name="admin_block_user"),
+    path("admin-panel/users/<int:user_id>/unblock/", views.admin_unblock_user,   name="admin_unblock_user"),
+    path("admin-panel/stores/save/",                views.admin_store_save,      name="admin_store_save"),
+    path("admin-panel/stores/<int:store_id>/delete/", views.admin_store_delete,  name="admin_store_delete"),
+]

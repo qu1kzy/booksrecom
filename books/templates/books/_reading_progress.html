@@ -1,0 +1,26 @@
+<div id="reading-progress-{{ book.id }}"
+     style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+  {% if progress %}
+  <div style="flex:1;min-width:120px">
+    <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+      <div style="height:100%;width:{{ progress.percent }}%;background:var(--accent);
+                  border-radius:3px;transition:width .3s"></div>
+    </div>
+    <span style="font-size:11px;color:var(--ghost);margin-top:3px;display:block">
+      {{ progress.current_page }}{% if book.pages %} / {{ book.pages }}{% endif %} стр.
+      ({{ progress.percent }}%)
+    </span>
+  </div>
+  {% endif %}
+  {% if user.is_authenticated %}
+  <form style="display:flex;gap:6px;align-items:center"
+        hx-post="{% url 'reading_progress_save' book.pk %}"
+        hx-headers='{"X-CSRFToken":"{{ csrf_token }}"}'
+        hx-on::after-request="this.reset()">
+    <input class="form-input" type="number" name="current_page" min="0"
+           {% if book.pages %}max="{{ book.pages }}"{% endif %}
+           placeholder="Текущая стр." style="width:130px">
+    <button type="submit" class="btn btn-secondary btn-sm">Обновить</button>
+  </form>
+  {% endif %}
+</div>

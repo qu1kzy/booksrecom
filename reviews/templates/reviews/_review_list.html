@@ -1,0 +1,14 @@
+{% for review in reviews %}
+<div class="review">
+  <div class="review__head">
+    <span class="review__user">{{ review.user.username }}</span>
+    <div style="display:flex;gap:12px;align-items:center">
+      <span class="review__stars">★{{ review.rating }}</span>
+      <span class="review__date">{{ review.created_at|date:"d.m.Y" }}</span>
+    </div>
+  </div>
+  <p class="review__text">{{ review.text }}</p>
+</div>
+{% empty %}
+<p class="empty">Отзывов пока нет</p>
+{% endfor %}

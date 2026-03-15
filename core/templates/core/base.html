@@ -1,0 +1,65 @@
+{% load static %}<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Книгополис{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'css/main.css' %}">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <div class="nav__inner">
+      <a href="{% url 'home' %}" class="nav__logo">КНИГОПОЛИС</a>
+      <div class="nav__links">
+        <a href="{% url 'catalog' %}"
+           class="nav__link {% if request.resolver_match.url_name == 'catalog' %}nav__link--active{% endif %}">
+          Каталог
+        </a>
+        <a href="{% url 'public_lists' %}"
+           class="nav__link {% if request.resolver_match.url_name == 'public_lists' %}nav__link--active{% endif %}">
+          Подборки
+        </a>
+        {% if user.is_authenticated %}
+          <a href="{% url 'profile' %}"
+             class="nav__link {% if request.resolver_match.url_name == 'profile' %}nav__link--active{% endif %}">
+            {{ user.username }}
+          </a>
+          {% if user.is_staff %}
+            <a href="{% url 'admin_panel' %}"
+               class="nav__link {% if request.resolver_match.url_name == 'admin_panel' %}nav__link--active{% endif %}">
+              Панель
+            </a>
+          {% endif %}
+          <form method="post" action="{% url 'logout' %}" style="display:inline">
+            {% csrf_token %}
+            <button type="submit" class="nav__link" style="background:none;border:none;cursor:pointer;font-size:13px;padding:0;font-family:inherit">
+              Выйти
+            </button>
+          </form>
+        {% else %}
+          <a href="{% url 'login' %}" class="nav__link">Войти</a>
+          <a href="{% url 'register' %}" class="btn btn-primary btn-sm">Регистрация</a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</nav>
+
+{% if messages %}
+<div class="wrap" style="margin-top:12px">
+  <ul class="messages">
+    {% for msg in messages %}<li class="{{ msg.tags }}">{{ msg }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<main>{% block content %}{% endblock %}</main>
+
+<script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+<script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+{% if recaptcha_public_key %}<script src="https://www.google.com/recaptcha/api.js" async defer></script>{% endif %}
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

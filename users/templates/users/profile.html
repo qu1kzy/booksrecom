@@ -1,0 +1,160 @@
+{% extends "core/base.html" %}
+{% block title %}{{ request.user.username }} — Книгополис{% endblock %}
+
+{% block content %}
+<div class="wrap page" style="padding-top:32px">
+
+  {# ── ШАПКА ПРОФИЛЯ ──────────────────────────────────────────────────────── #}
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;
+              gap:16px;flex-wrap:wrap;margin-bottom:20px">
+
+    <div style="display:flex;align-items:baseline;gap:12px">
+      <h1 style="font-size:22px">{{ request.user.username }}</h1>
+      {% if request.user.is_staff %}
+        <span class="badge badge-admin">Администратор</span>
+      {% endif %}
+    </div>
+
+    {# ── TELEGRAM — отдельный блок, не сдвигает заголовок ───────────────── #}
+    <div style="flex-shrink:0">
+      <div style="font-size:11px;color:var(--ghost);margin-bottom:4px">Telegram</div>
+      {% with profile=request.user.profile %}
+        {% include "users/_telegram_block.html" with profile=profile %}
+      {% endwith %}
+    </div>
+  </div>
+  <hr class="divider" style="margin-bottom:0">
+
+  <div x-data="{ tab: 'recs' }">
+    <div class="tabs">
+      <button class="tab" :class="{'tab--active': tab==='recs'}"     @click="tab='recs'">Рекомендации</button>
+      <button class="tab" :class="{'tab--active': tab==='ai'}"       @click="tab='ai'">✨ AI</button>
+      <button class="tab" :class="{'tab--active': tab==='subs'}"     @click="tab='subs'">Подписки</button>
+      <button class="tab" :class="{'tab--active': tab==='lists'}"    @click="tab='lists'">Мои списки</button>
+      <button class="tab" :class="{'tab--active': tab==='reviews'}"  @click="tab='reviews'">Отзывы</button>
+      <button class="tab" :class="{'tab--active': tab==='history'}"  @click="tab='history'">История</button>
+    </div>
+
+    {# ── ОБЫЧНЫЕ РЕКОМЕНДАЦИИ ─────────────────────────────────────────────── #}
+    <div x-show="tab==='recs'" x-cloak>
+      {% if recommendations %}
+        <p style="font-size:12px;color:var(--ghost);margin-bottom:16px">
+          На основе ваших списков и оценок
+        </p>
+        {% for book in recommendations %}
+          {% with index=forloop.counter %}{% include "core/_book_row.html" %}{% endwith %}
+        {% endfor %}
+      {% else %}
+        <div style="padding:40px 0;text-align:center">
+          <p style="font-size:15px;color:var(--muted);margin-bottom:8px">Пока нет рекомендаций</p>
+          <p style="font-size:13px;color:var(--ghost)">Добавьте книги в списки или оставьте отзывы.</p>
+          <a href="{% url 'catalog' %}" class="btn btn-secondary btn-sm" style="margin-top:16px;display:inline-flex">
+            Перейти в каталог
+          </a>
+        </div>
+      {% endif %}
+    </div>
+
+    {# ── AI-РЕКОМЕНДАЦИИ ──────────────────────────────────────────────────── #}
+    <div x-show="tab==='ai'" x-cloak>
+      {% include "users/_ai_recs_block.html" with ai_recs=ai_recs pending=False %}
+    </div>
+
+    {# ── ПОДПИСКИ НА АВТОРОВ ──────────────────────────────────────────────── #}
+    <div x-show="tab==='subs'" x-cloak>
+      {% if subscriptions %}
+        <div style="display:flex;flex-direction:column;gap:8px">
+          {% for sub in subscriptions %}
+          <div style="display:flex;align-items:center;gap:14px;padding:12px 14px;
+                      border:1px solid var(--border);border-radius:var(--radius)">
+            <a href="{% url 'author_detail' sub.author.id %}" class="lnk"
+               style="font-size:14px;font-weight:500;flex:1">{{ sub.author.name }}</a>
+            <span style="font-size:12px;color:var(--ghost)">с {{ sub.created_at|date:"d.m.Y" }}</span>
+            <div id="subscribe-btn-{{ sub.author.id }}">
+              <button class="btn btn-primary btn-sm"
+                      hx-post="{% url 'author_subscribe' sub.author.id %}"
+                      hx-target="#subscribe-btn-{{ sub.author.id }}"
+                      hx-swap="outerHTML"
+                      hx-headers='{"X-CSRFToken":"{{ csrf_token }}"}'>
+                ✓ Подписан
+              </button>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty">Вы не подписаны ни на одного автора.</p>
+        <a href="{% url 'catalog' %}" class="btn btn-secondary btn-sm" style="margin-top:12px;display:inline-flex">
+          Перейти в каталог
+        </a>
+      {% endif %}
+    </div>
+
+    {# ── СПИСКИ ────────────────────────────────────────────────────────────── #}
+    <div x-show="tab==='lists'" x-cloak>
+      <div style="display:flex;gap:8px;margin-bottom:20px;align-items:center;flex-wrap:wrap">
+        <input class="form-input" type="text" id="new-list-name"
+               placeholder="Название нового списка..." style="max-width:220px">
+        <button class="btn btn-secondary btn-sm"
+                hx-post="{% url 'create_list' %}"
+                hx-vals="js:{name:document.getElementById('new-list-name').value}"
+                hx-target="#lists-panel"
+                hx-swap="innerHTML"
+                hx-headers='{"X-CSRFToken":"{{ csrf_token }}"}'>
+          + Создать
+        </button>
+        <a href="{% url 'export_lists' %}" class="btn btn-secondary btn-sm" style="margin-left:auto">
+          ↓ Экспорт JSON
+        </a>
+        <a href="{% url 'public_lists' %}" class="btn btn-ghost btn-sm">
+          Публичные списки →
+        </a>
+      </div>
+      <div id="lists-panel">{% include "users/_lists_panel.html" with lists=lists %}</div>
+    </div>
+
+    {# ── ОТЗЫВЫ ───────────────────────────────────────────────────────────── #}
+    <div x-show="tab==='reviews'" x-cloak>
+      {% if my_reviews %}
+        {% for r in my_reviews %}
+        <div style="padding:14px 0;border-bottom:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px;gap:8px;flex-wrap:wrap">
+            <a href="{% url 'book_detail' r.book.id %}" class="lnk" style="font-weight:600">{{ r.book.title }}</a>
+            <div style="display:flex;gap:8px;align-items:center">
+              {% if r.status == 'pending' %}
+                <span style="font-size:11px;background:#fef3c7;color:#92400e;
+                             padding:2px 8px;border-radius:999px">На модерации</span>
+              {% elif r.status == 'rejected' %}
+                <span style="font-size:11px;background:#fee2e2;color:#991b1b;
+                             padding:2px 8px;border-radius:999px">Отклонён</span>
+              {% endif %}
+              <span style="font-size:12px;color:var(--muted)">★{{ r.rating }} · {{ r.created_at|date:"d.m.Y" }}</span>
+            </div>
+          </div>
+          <p style="font-size:13px;color:var(--muted)">{{ r.text }}</p>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p class="empty">Отзывов ещё нет</p>
+      {% endif %}
+    </div>
+
+    {# ── ИСТОРИЯ ПОИСКА ───────────────────────────────────────────────────── #}
+    <div x-show="tab==='history'" x-cloak>
+      {% if search_history %}
+        {% for entry in search_history %}
+        <a href="{% url 'search' %}?q={{ entry.query|urlencode }}"
+           style="display:flex;align-items:center;justify-content:space-between;
+                  padding:10px 0;border-bottom:1px solid var(--border);font-size:14px">
+          <span>{{ entry.query }}</span>
+          <span style="color:var(--ghost);font-size:12px">→</span>
+        </a>
+        {% endfor %}
+      {% else %}
+        <p class="empty">История пуста</p>
+      {% endif %}
+    </div>
+
+  </div>
+</div>
+{% endblock %}
