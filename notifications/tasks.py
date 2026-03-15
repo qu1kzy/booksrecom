@@ -53,7 +53,7 @@ def notify_book_added(book_id: int):
         if book.publication_year:
             text += f"Год: {book.publication_year}\n"
         if site_url:
-            text += f"\n<a href='{book_url}'>Открыть в Книгополис</a>"
+            text += f"\n<a href='{book_url}'>Открыть в Строка</a>"
 
         ok = send_message(profile.telegram_chat_id, text)
         if ok:

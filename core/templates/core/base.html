@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}Книгополис{% endblock %}</title>
+  <title>{% block title %}Строка{% endblock %}</title>
   <link rel="stylesheet" href="{% static 'css/main.css' %}">
 </head>
 <body>
@@ -11,7 +11,7 @@
 <nav class="nav">
   <div class="wrap">
     <div class="nav__inner">
-      <a href="{% url 'home' %}" class="nav__logo">КНИГОПОЛИС</a>
+      <a href="{% url 'home' %}" class="nav__logo">Строка</a>
       <div class="nav__links">
         <a href="{% url 'catalog' %}"
            class="nav__link {% if request.resolver_match.url_name == 'catalog' %}nav__link--active{% endif %}">

@@ -175,7 +175,7 @@ def check_price_alerts():
                     f"Ваш порог: {alert.threshold} ₽\n"
                 )
                 if site_url:
-                    text += f"\n<a href='{book_url}'>Открыть в Книгополис</a>"
+                    text += f"\n<a href='{book_url}'>Открыть в 'Строка'</a>"
                 send_message(profile.telegram_chat_id, text)
 
             alert.triggered_at = now

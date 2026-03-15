@@ -1,5 +1,5 @@
 """
-Telegram-бот для Книгополиса.
+Telegram-бот для Строкаа.
 
 Запуск (на сервере, вне Docker):
     python telegram_bot.py
@@ -57,7 +57,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         pass
 
     await message.answer(
-        "👋 Привет! Это бот <b>Книгополиса</b>.\n\n"
+        "👋 Привет! Это бот <b>Строкаа</b>.\n\n"
         "Чтобы получать уведомления о новых книгах любимых авторов, "
         "привяжите ваш аккаунт.\n\n"
         "Введите ваш <b>логин</b> на сайте:",

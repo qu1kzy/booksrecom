@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Минимальный Telegram-бот для привязки chat_id к аккаунту Книгополиса.
+Минимальный Telegram-бот для привязки chat_id к аккаунту Строкаа.
 
 Работает в режиме polling — не требует публичного URL/webhook.
 Запуск: python bot.py
@@ -89,7 +89,7 @@ def handle(update: dict):
             profile = UserProfile.objects.get(telegram_username__iexact=username)
         except UserProfile.DoesNotExist:
             send(chat_id,
-                 f"❌ Аккаунт с Telegram @{username} не найден в Книгополисе.\n"
+                 f"❌ Аккаунт с Telegram @{username} не найден в Строкае.\n"
                  "Сначала укажите ваш Telegram-логин в профиле на сайте.")
             return
 
@@ -97,7 +97,7 @@ def handle(update: dict):
         profile.save(update_fields=["telegram_chat_id"])
 
         send(chat_id,
-             f"✅ <b>Готово!</b> Аккаунт @{username} привязан к Книгополису.\n\n"
+             f"✅ <b>Готово!</b> Аккаунт @{username} привязан к Строкау.\n\n"
              "Теперь вы будете получать уведомления о новых книгах авторов, "
              "на которых подписаны.")
         logger.info("Linked @%s → chat_id %s", username, chat_id)
