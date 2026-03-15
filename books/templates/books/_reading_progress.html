@@ -1,26 +1,64 @@
 <div id="reading-progress-{{ book.id }}"
      style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-  {% if progress %}
+  <!-- Полоска и текст теперь показываются всегда; значения по умолчанию — 0 -->
   <div style="flex:1;min-width:120px">
     <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
-      <div style="height:100%;width:{{ progress.percent }}%;background:var(--accent);
-                  border-radius:3px;transition:width .3s"></div>
+      <div id="progress-bar-{{ book.id }}"
+           style="height:100%;width:{{ progress.percent|default:"0" }}%;background:var(--accent);
+                  border-radius:3px;transition:width 0.5s ease">
+      </div>
     </div>
-    <span style="font-size:11px;color:var(--ghost);margin-top:3px;display:block">
-      {{ progress.current_page }}{% if book.pages %} / {{ book.pages }}{% endif %} стр.
-      ({{ progress.percent }}%)
+    <span id="progress-text-{{ book.id }}"
+          style="font-size:11px;color:var(--ghost);margin-top:3px;display:block">
+      {{ progress.current_page|default:"0" }}{% if book.pages %} / {{ book.pages }}{% endif %} стр.
+      ({{ progress.percent|default:"0" }}%)
     </span>
   </div>
-  {% endif %}
+
   {% if user.is_authenticated %}
-  <form style="display:flex;gap:6px;align-items:center"
+  <form id="reading-progress-form-{{ book.id }}"
+        style="display:flex;gap:6px;align-items:center"
         hx-post="{% url 'reading_progress_save' book.pk %}"
         hx-headers='{"X-CSRFToken":"{{ csrf_token }}"}'
-        hx-on::after-request="this.reset()">
+        hx-swap="none">
     <input class="form-input" type="number" name="current_page" min="0"
            {% if book.pages %}max="{{ book.pages }}"{% endif %}
-           placeholder="Текущая стр." style="width:130px">
+           placeholder="Текущая стр." style="width:135px">
     <button type="submit" class="btn btn-secondary btn-sm">Обновить</button>
   </form>
   {% endif %}
 </div>
+
+<script>
+  (function(){
+    const form = document.getElementById('reading-progress-form-{{ book.id }}');
+    if (!form) return;
+
+    // Слушаем событие, которое HTMX выбрасывает на элемент формы
+    form.addEventListener('htmx:afterRequest', function(evt){
+      const xhr = evt && evt.detail && evt.detail.xhr;
+      if (!xhr) return;
+
+      try {
+        const data = JSON.parse(xhr.responseText);
+        const bar = document.getElementById('progress-bar-{{ book.id }}');
+        const text = document.getElementById('progress-text-{{ book.id }}');
+
+        if (bar) {
+          // ограничим проценты [0..100] на клиенте (не обязателен)
+          const pct = Math.max(0, Math.min(100, Number(data.percent) || 0));
+          bar.style.width = pct + '%';
+        }
+        if (text) {
+          const current = Number(data.current_page) || 0;
+          text.textContent = current + '{% if book.pages %} / {{ book.pages }}{% endif %} стр. (' + (Number(data.percent)||0) + '%)';
+        }
+
+        // очистить поле ввода (по желанию)
+        form.reset();
+      } catch (err) {
+        console.error('reading-progress: не удалось распарсить JSON', err, xhr.responseText);
+      }
+    });
+  })();
+</script>

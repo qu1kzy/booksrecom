@@ -208,8 +208,9 @@ def toggle_list(request):
     """HTMX POST — переключить книгу в списке пользователя."""
     if request.method != "POST":
         return HttpResponse(status=405)
-    book      = get_object_or_404(Book, pk=request.POST.get("book_id"))
-    list_id   = request.POST.get("list_id")
+
+    book = get_object_or_404(Book, pk=request.POST.get("book_id"))
+    list_id = request.POST.get("list_id")
     user_list = get_object_or_404(UserList, pk=list_id, user=request.user)
 
     if user_list.books.filter(pk=book.pk).exists():
@@ -217,17 +218,22 @@ def toggle_list(request):
     else:
         user_list.books.add(book)
 
-    # Инвалидируем AI-кеш рекомендаций — вкус пользователя изменился
+    # Инвалидация AI‑кеша
     from books.ai_recommendations import invalidate
     invalidate(request.user.pk)
 
-    # Обновлённое состояние всех списков
+    # Актуальные списки пользователя
     book_list_ids = set(
         UserList.objects.filter(user=request.user, books=book).values_list("id", flat=True)
     )
     user_lists = UserList.objects.filter(user=request.user)
+
+    # Возвращаем только внутреннюю часть списка (partial)
     return render(request, "books/_list_dropdown.html", {
-        "book": book, "user_lists": user_lists, "book_list_ids": book_list_ids
+        "book": book,
+        "user_lists": user_lists,
+        "book_list_ids": book_list_ids,
+        "partial": True   # <-- ключевой флаг
     })
 
 

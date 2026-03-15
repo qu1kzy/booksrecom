@@ -23,7 +23,6 @@ def register(request):
     if request.method == "POST" and form.is_valid():
         user = form.save()
         login(request, user)
-        messages.success(request, f"Добро пожаловать, {user.username}!")
         return redirect("onboarding")
     return render(request, "users/register.html", {"form": form})
 

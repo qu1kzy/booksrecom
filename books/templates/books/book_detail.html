@@ -185,9 +185,12 @@
     {% include "books/_price_alert.html" with book=book alert=user_price_alert %}
   </div>
   {% endif %}
+  {% if book.pages %}
   <div style="margin-bottom:10px">
     {% include "books/_reading_progress.html" with book=book progress=reading_progress %}
   </div>
+  {% endif %}
+
   {% endif %}
   <hr class="divider" style="margin-bottom:0">
 
@@ -196,7 +199,7 @@
     <div class="tabs">
       <button class="tab" :class="{'tab--active': tab==='about'}"   @click="tab='about'">Описание</button>
       <button class="tab" :class="{'tab--active': tab==='reviews'}" @click="tab='reviews'">Отзывы ({{ review_count }})</button>
-      {% if user.is_staff or store_links or unlinked_stores %}
+      {% if user.is_staff or store_links  %}
       <button class="tab" :class="{'tab--active': tab==='stores'}"  @click="tab='stores'">Магазины</button>
       {% endif %}
       <button class="tab" :class="{'tab--active': tab==='tags'}"    @click="tab='tags'">Теги{% if user.is_staff %} читателей{% endif %}</button>

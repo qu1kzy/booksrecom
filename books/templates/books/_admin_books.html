@@ -6,9 +6,9 @@
               border:1px solid var(--border);border-radius:var(--radius);background:var(--bg)">
 
     <div style="min-width:0">
-      <div style="font-size:13px;font-weight:600;font-style:italic;
+      <div style="font-size:13px;font-weight:600;
                   white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-        {{ book.title }}
+        <a href="{% url 'book_detail' book.pk %}">{{ book.title }}</a>
       </div>
     </div>
 

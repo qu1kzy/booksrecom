@@ -20,8 +20,7 @@
           hx-post="{% url 'request_price' book.id %}"
           hx-target="#price-block-{{ book.id }}"
           hx-swap="outerHTML"
-           hx-include="#price-form-{{ book.id }}"
-    >
+          hx-headers='{"X-CSRFToken":"{{ csrf_token }}"}'>
 
       {% if recaptcha_public_key %}
         <div class="g-recaptcha"
@@ -49,7 +48,6 @@
         </button>
       </div>
     </form>
-
   </div>
 </div>
 
