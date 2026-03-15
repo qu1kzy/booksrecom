@@ -32,6 +32,7 @@
             title="История цен">📈</button>
     {% if user.is_authenticated %}
     <button class="btn btn-ghost btn-sm"
+            type="button"
             onclick="document.getElementById('price-captcha-modal-{{ book.id }}').style.display='flex'"
             title="Обновить цену">↻</button>
     {% endif %}
@@ -42,6 +43,7 @@
   <div id="price-block-{{ book.id }}">
     <p style="font-size:12px;color:var(--err);margin-bottom:8px;margin-left:auto">Капча не пройдена. Попробуйте ещё раз.</p>
     <button class="btn btn-secondary btn-sm"
+            type="button"
             onclick="document.getElementById('price-captcha-modal-{{ book.id }}').style.display='flex'">
       Запросить цену
     </button>
@@ -52,6 +54,7 @@
   <div id="price-block-{{ book.id }}" style="margin-left:auto">
     {% if user.is_authenticated %}
     <button class="btn btn-secondary btn-sm"
+            type="button"
             onclick="document.getElementById('price-captcha-modal-{{ book.id }}').style.display='flex'">
       Запросить цену
     </button>
