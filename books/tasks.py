@@ -144,6 +144,227 @@ def extract_tags_from_description(book_id: int):
 
 
 @shared_task
+def classify_book_mood(book_id: int):
+    """AI-классификация книги по mood-тегам."""
+    from openai import OpenAI
+    from books.models import Book, MoodTag, BookMood
+    from django.conf import settings as conf
+    import json
+
+    MOOD_TAXONOMY = [
+        "уютная", "мрачная", "напряжённая", "лёгкая", "меланхоличная", "мистическая",
+        "стремительная", "размеренная", "медленная",
+        "вдохновляющая", "трогательная", "пугающая", "смешная", "философская",
+        "лёгкое чтение", "средняя сложность", "требует вдумчивости",
+    ]
+
+    try:
+        book = Book.objects.prefetch_related("authors", "genres", "tags").get(pk=book_id)
+    except Book.DoesNotExist:
+        return
+
+    # Собираем контекст
+    authors = ", ".join(a.name for a in book.authors.all())
+    genres = ", ".join(g.name for g in book.genres.all())
+    tags = ", ".join(t.name for t in book.tags.all()[:10])
+    desc = (book.description or "")[:500]
+
+    if not desc and not genres:
+        return
+
+    prompt = (
+        f"Книга: «{book.title}»\n"
+        f"Автор: {authors}\n"
+        f"Жанры: {genres}\n"
+        f"Теги: {tags}\n"
+        f"Описание: {desc}\n\n"
+        f"Классифицируй книгу по настроению. Выбери 3-5 подходящих тегов из списка:\n"
+        f"{', '.join(MOOD_TAXONOMY)}\n\n"
+        f"Для каждого тега укажи уверенность от 0.5 до 1.0."
+    )
+
+    client = OpenAI(
+        api_key=conf.ANTHROPIC_API_KEY,
+        base_url=conf.ANTHROPIC_BASE_URL,
+    )
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "classify_moods",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "moods": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "confidence": {"type": "number"},
+                            },
+                            "required": ["name", "confidence"],
+                        },
+                    },
+                },
+                "required": ["moods"],
+            },
+        },
+    }]
+
+    try:
+        resp = client.chat.completions.create(
+            model="claude-haiku-4-5-20251001",
+            messages=[{"role": "user", "content": prompt}],
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "classify_moods"}},
+            max_tokens=300,
+        )
+    except Exception as exc:
+        logger.error("classify_book_mood API error for book #%d: %s", book_id, exc)
+        return
+
+    for choice in resp.choices:
+        if not choice.message.tool_calls:
+            continue
+        for tc in choice.message.tool_calls:
+            data = json.loads(tc.function.arguments)
+            for mood_item in data.get("moods", []):
+                mood_name = mood_item["name"].lower().strip()
+                confidence = float(mood_item.get("confidence", 0.8))
+                mood_tag = MoodTag.objects.filter(name=mood_name).first()
+                if mood_tag and confidence >= 0.5:
+                    BookMood.objects.update_or_create(
+                        book=book, mood=mood_tag,
+                        defaults={"confidence": confidence, "source": "ai"},
+                    )
+
+    logger.info("Mood classification done for book #%d", book_id)
+
+
+@shared_task(bind=True)
+def import_library_task(self, user_id: int, file_content: str):
+    """Фоновый импорт библиотеки из Goodreads CSV."""
+    from django.contrib.auth.models import User
+    from .import_library import import_library
+    from .ai_recommendations import invalidate as invalidate_ai_cache
+
+    try:
+        user = User.objects.get(pk=user_id)
+        stats = import_library(user, file_content)
+        invalidate_ai_cache(user_id)
+        logger.info("Library import for user #%d: %s", user_id, stats)
+        return stats
+    except Exception as exc:
+        logger.error("Library import failed for user #%d: %s", user_id, exc)
+        raise
+
+
+@shared_task
+def generate_smart_quotes(book_id: int):
+    """AI-генерация умных цитат для книги."""
+    from openai import OpenAI
+    from books.models import Book, Quote, MoodTag
+    from django.contrib.auth.models import User
+    from django.conf import settings as conf
+    import json
+
+    try:
+        book = Book.objects.prefetch_related("authors", "genres").get(pk=book_id)
+    except Book.DoesNotExist:
+        return
+
+    # Не генерируем, если уже есть AI-цитаты
+    if book.quotes.filter(is_ai_generated=True).count() >= 3:
+        return
+
+    authors = ", ".join(a.name for a in book.authors.all())
+    genres = ", ".join(g.name for g in book.genres.all())
+    desc = (book.description or "")[:500]
+
+    if not desc:
+        return
+
+    mood_names = list(MoodTag.objects.values_list("name", flat=True))
+
+    prompt = (
+        f"Книга: «{book.title}»\n"
+        f"Автор: {authors}\n"
+        f"Жанры: {genres}\n"
+        f"Описание: {desc}\n\n"
+        f"Сгенерируй 3 вдохновляющие цитаты, которые МОГЛИ БЫ быть в этой книге. "
+        f"Цитаты должны отражать стиль автора и тематику книги. "
+        f"Для каждой цитаты подбери подходящее настроение из списка:\n"
+        f"{', '.join(mood_names)}"
+    )
+
+    client = OpenAI(
+        api_key=conf.ANTHROPIC_API_KEY,
+        base_url=conf.ANTHROPIC_BASE_URL,
+    )
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "save_quotes",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "quotes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                                "mood": {"type": "string"},
+                            },
+                            "required": ["text", "mood"],
+                        },
+                    },
+                },
+                "required": ["quotes"],
+            },
+        },
+    }]
+
+    try:
+        resp = client.chat.completions.create(
+            model="claude-haiku-4-5-20251001",
+            messages=[{"role": "user", "content": prompt}],
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "save_quotes"}},
+            max_tokens=500,
+        )
+    except Exception as exc:
+        logger.error("generate_smart_quotes API error for book #%d: %s", book_id, exc)
+        return
+
+    # Используем первого staff-пользователя как автора AI-цитат
+    ai_user = User.objects.filter(is_staff=True).first()
+    if not ai_user:
+        return
+
+    for choice in resp.choices:
+        if not choice.message.tool_calls:
+            continue
+        for tc in choice.message.tool_calls:
+            data = json.loads(tc.function.arguments)
+            for q_item in data.get("quotes", [])[:3]:
+                text = q_item.get("text", "").strip()
+                if not text or len(text) < 10:
+                    continue
+                mood_name = q_item.get("mood", "").lower().strip()
+                mood = MoodTag.objects.filter(name=mood_name).first()
+                Quote.objects.create(
+                    user=ai_user,
+                    book=book,
+                    text=text,
+                    is_ai_generated=True,
+                    mood_tag=mood,
+                )
+
+    logger.info("Smart quotes generated for book #%d", book_id)
+
+
+@shared_task
 def check_price_alerts():
     """Celery Beat: проверяем алерты цен раз в сутки."""
     from django.utils import timezone
@@ -160,12 +381,17 @@ def check_price_alerts():
         .select_related("user__profile", "book")
     )
 
+    from notifications.email import send_price_alert_email
+
     for alert in alerts:
         book = alert.book
         if book.avg_price is None:
             continue
         if book.avg_price <= alert.threshold:
+            notified = False
             profile = getattr(alert.user, "profile", None)
+
+            # Telegram (приоритетный канал)
             if profile and profile.telegram_chat_id:
                 book_url = f"{site_url}/books/{book.pk}/"
                 text = (
@@ -177,6 +403,13 @@ def check_price_alerts():
                 if site_url:
                     text += f"\n<a href='{book_url}'>Открыть в 'Строка'</a>"
                 send_message(profile.telegram_chat_id, text)
+                notified = True
+
+            # Email (fallback если нет Telegram)
+            if not notified and alert.user.email:
+                send_price_alert_email(
+                    alert.user, book, book.avg_price, alert.threshold
+                )
 
             alert.triggered_at = now
             alert.save(update_fields=["triggered_at"])

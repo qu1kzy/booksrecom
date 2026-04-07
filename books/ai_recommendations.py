@@ -18,7 +18,9 @@ from books.models import UserList
 from reviews.models import Review
 from books.recommendations import recommended_for_user
 from books.models import Book
-import anthropic
+from search.models import SearchHistory
+import json
+from openai import OpenAI
 
 
 logger = logging.getLogger(__name__)
@@ -45,7 +47,11 @@ def build_user_context(user) -> dict:
     """Собрать профиль пользователя для передачи в ИИ."""
 
     lists_data = []
-    for ul in UserList.objects.filter(user=user).prefetch_related("books__authors", "books__genres"):
+    liked_tags: dict[str, int] = {}  # A3: теги из положительных списков
+    # A3: добавляем prefetch тегов книг
+    for ul in UserList.objects.filter(user=user).prefetch_related(
+        "books__authors", "books__genres", "books__tags"
+    ):
         books_in_list = [
             {
                 "title": b.title,
@@ -61,6 +67,11 @@ def build_user_context(user) -> dict:
                 "sentiment": ul.sentiment_tag,
                 "books": books_in_list,
             })
+        # A3: собираем теги из positive/wishlist-списков
+        if ul.sentiment_tag in ("positive", "wishlist"):
+            for b in ul.books.all()[:20]:
+                for t in b.tags.all():
+                    liked_tags[t.name] = liked_tags.get(t.name, 0) + 1
 
     reviews_data = []
     for r in Review.objects.filter(user=user).select_related("book")[:20]:
@@ -74,11 +85,31 @@ def build_user_context(user) -> dict:
     fav_genres = list(profile.favorite_genres.values_list("name", flat=True)) if profile else []
     fav_authors = list(profile.favorite_authors.values_list("name", flat=True)) if profile else []
 
+    # A3: топ-10 тегов по частоте
+    top_liked_tags = sorted(liked_tags, key=liked_tags.get, reverse=True)[:10]
+
+    # B1: история поиска — последние уникальные запросы
+    raw_queries = list(
+        SearchHistory.objects.filter(user=user)
+        .order_by("-created_at")
+        .values_list("query", flat=True)[:15]
+    )
+    seen_q: set[str] = set()
+    unique_queries: list[str] = []
+    for q in raw_queries:
+        key = q.lower().strip()
+        if key and key not in seen_q:
+            seen_q.add(key)
+            unique_queries.append(q.strip())
+    search_queries = unique_queries[:10]
+
     return {
         "lists": lists_data,
         "reviews": reviews_data,
         "fav_genres": fav_genres,
         "fav_authors": fav_authors,
+        "liked_tags": top_liked_tags,       # A3
+        "search_queries": search_queries,   # B1
     }
 
 
@@ -87,34 +118,37 @@ def fetch_candidates(user, limit=50) -> list:
     return recommended_for_user(user, limit=limit)
 
 
-# Схема для tool_use — ИИ обязан вернуть именно этот формат
+# Схема для function calling (OpenAI-совместимый формат)
 _RECOMMEND_TOOL = {
-    "name": "recommend_books",
-    "description": "Вернуть список рекомендованных книг с объяснениями",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "recommendations": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "book_index": {
-                            "type": "integer",
-                            "description": "Порядковый номер книги из списка кандидатов (1-50)"
+    "type": "function",
+    "function": {
+        "name": "recommend_books",
+        "description": "Вернуть список рекомендованных книг с объяснениями",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "recommendations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "book_index": {
+                                "type": "integer",
+                                "description": "Порядковый номер книги из списка кандидатов (1-50)"
+                            },
+                            "reason": {
+                                "type": "string",
+                                "description": "Краткое объяснение на русском, 1-2 предложения"
+                            },
                         },
-                        "reason": {
-                            "type": "string",
-                            "description": "Краткое объяснение на русском, 1-2 предложения"
-                        },
+                        "required": ["book_index", "reason"],
                     },
-                    "required": ["book_index", "reason"],
-                },
-                "minItems": 1,
-                "maxItems": 10,
-            }
+                    "minItems": 1,
+                    "maxItems": 10,
+                }
+            },
+            "required": ["recommendations"],
         },
-        "required": ["recommendations"],
     },
 }
 
@@ -128,6 +162,7 @@ def ask_claude(user_context: dict, candidates: list) -> list:
     api_key = getattr(settings, "ANTHROPIC_API_KEY", "")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY не задан в settings")
+    base_url = getattr(settings, "ANTHROPIC_BASE_URL", "https://api.aitunnel.ru/v1/")
 
     # Индексированный список кандидатов (1-based) — без реальных pk
     candidates_lines = []
@@ -138,6 +173,10 @@ def ask_claude(user_context: dict, candidates: list) -> list:
             f"{i + 1}. «{b.title}» — {authors} "
             f"({genres}) рейтинг: {b.avg_rating:.1f}"
         )
+        # A3: народные теги из одобренных отзывов
+        tags = [t.name for t in b.tags.all()]
+        if tags:
+            line += f" [{', '.join(tags)}]"
         if b.description:
             line += f"\n   {b.description[:150]}"
         candidates_lines.append(line)
@@ -161,6 +200,16 @@ def ask_claude(user_context: dict, candidates: list) -> list:
         profile_parts.append(f"Список {label}: {', '.join(titles)}")
     for r in user_context["reviews"][:5]:
         profile_parts.append(f"Оценил «{r['title']}» на {r['rating']}/5")
+    # A3: теги любимых книг
+    if user_context.get("liked_tags"):
+        profile_parts.append(
+            f"Теги часто встречающиеся в любимых книгах: {', '.join(user_context['liked_tags'])}"
+        )
+    # B1: история поиска
+    if user_context.get("search_queries"):
+        profile_parts.append(
+            f"Недавно искал: {', '.join(user_context['search_queries'])}"
+        )
     profile_text = "\n".join(profile_parts) or "Новый пользователь, предпочтения неизвестны"
 
     prompt = (
@@ -172,23 +221,21 @@ def ask_claude(user_context: dict, candidates: list) -> list:
         f"Используй порядковый номер книги из списка (поле book_index)."
     )
 
-    client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    response = client.chat.completions.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1000,
         tools=[_RECOMMEND_TOOL],
-        tool_choice={"type": "tool", "name": "recommend_books"},
+        tool_choice={"type": "function", "function": {"name": "recommend_books"}},
         messages=[{"role": "user", "content": prompt}],
     )
 
-    # tool_use гарантирует структуру — json.loads не нужен
-    tool_block = next(
-        (b for b in message.content if b.type == "tool_use"), None
-    )
-    if not tool_block:
-        raise ValueError("Claude не вернул tool_use блок")
+    # Достаём аргументы function call — JSON гарантирован схемой
+    tool_calls = response.choices[0].message.tool_calls
+    if not tool_calls:
+        raise ValueError("Модель не вернула function call")
 
-    return tool_block.input.get("recommendations", [])
+    return json.loads(tool_calls[0].function.arguments).get("recommendations", [])
 
 
 def generate_ai_recommendations(user) -> list:

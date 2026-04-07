@@ -5,29 +5,35 @@
 <div class="wrap page" style="padding-top:48px;max-width:620px;margin:0 auto">
 
   <div style="text-align:center;margin-bottom:36px">
-    <h1 style="font-size:24px;margin-bottom:8px">Добро пожаловать!</h1>
-    <p style="font-size:15px;color:var(--muted)">
-      Выберите любимые жанры и авторов — мы сразу подберём рекомендации.
-    </p>
+    {% if is_returning %}
+      <h1 style="font-size:24px;margin-bottom:8px">Изменить предпочтения</h1>
+      <p style="font-size:15px;color:var(--muted)">
+        Обновите жанры и авторов — рекомендации подстроятся автоматически.
+      </p>
+    {% else %}
+      <h1 style="font-size:24px;margin-bottom:8px">Добро пожаловать!</h1>
+      <p style="font-size:15px;color:var(--muted)">
+        Выберите любимые жанры и авторов — мы сразу подберём рекомендации.
+      </p>
+    {% endif %}
   </div>
 
-  <form method="post" action="{% url 'onboarding' %}"
-        x-data="{ selectedGenres: [], selectedAuthors: [] }">
+  <form method="post" action="{% url 'onboarding' %}" id="onb-form">
     {% csrf_token %}
 
     {# Жанры #}
     <div style="margin-bottom:32px">
       <h2 style="font-size:15px;font-weight:600;margin-bottom:14px">Жанры</h2>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">
+      <div id="onb-genres" style="display:flex;flex-wrap:wrap;gap:8px">
         {% for genre in onboarding_genres %}
         <label style="cursor:pointer">
-          <input type="checkbox" name="genres" value="{{ genre.pk }}" style="display:none"
-                 x-model="selectedGenres" :value="'{{ genre.pk }}'">
+          <input type="checkbox" name="genres" value="{{ genre.pk }}"
+                 style="display:none" class="onb-cb"
+                 {% if genre.pk in selected_genre_ids %}checked{% endif %}>
           <span style="display:inline-block;padding:7px 16px;border-radius:999px;
-                       font-size:13px;border:1px solid var(--border);transition:all .15s"
-                :style="selectedGenres.includes('{{ genre.pk }}') ?
-                        'background:var(--accent);color:#fff;border-color:var(--accent)' :
-                        'background:transparent;color:var(--text);border-color:var(--border)'">
+                       font-size:13px;border:1px solid var(--border);
+                       background:transparent;color:var(--ink);transition:all .15s;
+                       user-select:none;cursor:pointer">
             {{ genre.name }}
           </span>
         </label>
@@ -38,16 +44,16 @@
     {# Авторы #}
     <div style="margin-bottom:36px">
       <h2 style="font-size:15px;font-weight:600;margin-bottom:14px">Авторы</h2>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">
+      <div id="onb-authors" style="display:flex;flex-wrap:wrap;gap:8px">
         {% for author in onboarding_authors %}
         <label style="cursor:pointer">
-          <input type="checkbox" name="authors" value="{{ author.pk }}" style="display:none"
-                 x-model="selectedAuthors" :value="'{{ author.pk }}'">
+          <input type="checkbox" name="authors" value="{{ author.pk }}"
+                 style="display:none" class="onb-cb"
+                 {% if author.pk in selected_author_ids %}checked{% endif %}>
           <span style="display:inline-block;padding:7px 16px;border-radius:999px;
-                       font-size:13px;border:1px solid var(--border);transition:all .15s"
-                :style="selectedAuthors.includes('{{ author.pk }}') ?
-                        'background:var(--accent);color:#fff;border-color:var(--accent)' :
-                        'background:transparent;color:var(--text);border-color:var(--border)'">
+                       font-size:13px;border:1px solid var(--border);
+                       background:transparent;color:var(--ink);transition:all .15s;
+                       user-select:none;cursor:pointer">
             {{ author.name }}
           </span>
         </label>
@@ -56,15 +62,48 @@
     </div>
 
     <div style="display:flex;gap:14px;justify-content:flex-end">
-      <button type="submit" name="skip" value="1"
-              style="background:none;border:none;cursor:pointer;font-size:14px;
-                     color:var(--muted);font-family:inherit">
-        Пропустить
-      </button>
+      {% if is_returning %}
+        <a href="{% url 'profile' %}"
+           style="background:none;border:none;cursor:pointer;font-size:14px;
+                  color:var(--muted);font-family:inherit;text-decoration:none;
+                  display:inline-flex;align-items:center">
+          Назад в профиль
+        </a>
+      {% else %}
+        <button type="submit" name="skip" value="1"
+                style="background:none;border:none;cursor:pointer;font-size:14px;
+                       color:var(--muted);font-family:inherit">
+          Пропустить
+        </button>
+      {% endif %}
       <button type="submit" class="btn btn-primary" style="min-width:160px">
-        Сохранить и начать →
+        {% if is_returning %}Сохранить{% else %}Сохранить и начать →{% endif %}
       </button>
     </div>
   </form>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function(){
+  function sync(cb) {
+    var span = cb.nextElementSibling;
+    if (cb.checked) {
+      span.style.background = 'var(--accent)';
+      span.style.color = '#fff';
+      span.style.borderColor = 'var(--accent)';
+    } else {
+      span.style.background = 'transparent';
+      span.style.color = 'var(--ink)';
+      span.style.borderColor = 'var(--border)';
+    }
+    span.style.borderRadius = '999px';
+  }
+  document.querySelectorAll('.onb-cb').forEach(function(cb) {
+    sync(cb);
+    cb.addEventListener('change', function(){ sync(cb); });
+  });
+})();
+</script>
 {% endblock %}

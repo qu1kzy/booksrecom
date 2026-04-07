@@ -1,5 +1,7 @@
 import logging
 from celery import shared_task
+from reviews.models import Review
+from books.tag_extraction import extract_tag_from_review, apply_tag_to_book
 
 logger = logging.getLogger(__name__)
 
@@ -10,8 +12,7 @@ def extract_tag_for_review(review_id: int) -> None:
     Celery-задача: вызывает Claude для извлечения тега из одобренного отзыва
     и применяет результат к книге.
     """
-    from reviews.models import Review
-    from books.tag_extraction import extract_tag_from_review, apply_tag_to_book
+
 
     try:
         review = Review.objects.select_related("book").prefetch_related("book__authors").get(pk=review_id)

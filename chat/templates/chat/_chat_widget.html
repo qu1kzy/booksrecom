@@ -1,0 +1,125 @@
+{# Club chat widget. Vars: room (ChatRoom), user (current user) #}
+<div x-data="clubChat({{ room.pk }}, '{{ user.username|escapejs }}')"
+     style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-top:12px">
+
+  <div class="ai-chat-messages" id="club-chat-{{ room.pk }}"
+       style="height:340px;overflow-y:auto;padding:12px">
+    {% for msg in room.messages.all|slice:":80" %}
+    <div class="chat-msg-wrap {% if msg.user == user %}chat-msg-wrap--own{% endif %}"
+         id="cmsg-{{ msg.pk }}">
+      {% if msg.user != user %}
+        <span class="chat-msg__author">{{ msg.user.username }}</span>
+      {% endif %}
+      <div class="ai-chat-msg {% if msg.user == user %}ai-chat-msg--user{% else %}ai-chat-msg--ai{% endif %}"
+           {% if msg.user == user %}@contextmenu.prevent="showMenu($event, {{ msg.pk }}, $el.querySelector('.msg-text').textContent.trim())"{% endif %}>
+        <span class="msg-text">{{ msg.body }}</span>
+      </div>
+      <span class="chat-msg__time">{{ msg.created_at|date:"H:i" }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  {# Контекстное меню #}
+  <div x-show="menu.visible" x-cloak @click.outside="menu.visible=false"
+       :style="`position:fixed;top:${menu.y}px;left:${menu.x}px;z-index:9999`"
+       style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
+              box-shadow:0 4px 16px rgba(0,0,0,.12);overflow:hidden;min-width:140px">
+    <button @click="startEdit()"
+            style="display:block;width:100%;padding:10px 14px;text-align:left;background:none;
+                   border:none;cursor:pointer;font-size:13px;font-family:inherit;color:var(--ink)"
+            @mouseenter="$el.style.background='var(--surface)'" @mouseleave="$el.style.background=''">
+      Редактировать
+    </button>
+  </div>
+
+  {# Модалка редактирования #}
+  <div x-show="editModal.visible" x-cloak
+       style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:10000;
+              display:flex;align-items:center;justify-content:center;padding:20px">
+    <div style="background:var(--bg);border-radius:var(--radius);width:100%;max-width:480px;
+                padding:20px;box-shadow:0 8px 32px rgba(0,0,0,.15)">
+      <p style="font-size:14px;font-weight:600;margin-bottom:12px">Редактировать</p>
+      <textarea class="form-input form-textarea" x-model="editModal.text" rows="3"
+                style="margin-bottom:12px"></textarea>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-ghost btn-sm" @click="editModal.visible=false">Отмена</button>
+        <button class="btn btn-primary btn-sm" @click="saveEdit()">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="chat-input-bar" style="padding:8px 12px">
+    <input type="text" class="form-input" placeholder="Сообщение…"
+           x-model="text" @keydown.enter="send()" maxlength="2000" style="flex:1">
+    <button class="btn btn-primary btn-sm" @click="send()">&#10148;</button>
+  </div>
+</div>
+
+<script>
+function clubChat(roomId, username) {
+  let ws = null;
+  const boxId = `club-chat-${roomId}`;
+
+  function connectWS() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws/chat/${roomId}/`);
+    ws.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+      if (data.type === 'edit') {
+        const el = document.getElementById(`cmsg-${data.id}`);
+        if (el) el.querySelector('.msg-text').textContent = data.body;
+        return;
+      }
+      const box = document.getElementById(boxId);
+      const isOwn = data.username === username;
+      const wrap = document.createElement('div');
+      wrap.className = 'chat-msg-wrap' + (isOwn ? ' chat-msg-wrap--own' : '');
+      wrap.id = `cmsg-${data.id}`;
+      let html = '';
+      if (!isOwn) html += `<span class="chat-msg__author">${esc(data.username)}</span>`;
+      html += `<div class="ai-chat-msg ${isOwn ? 'ai-chat-msg--user' : 'ai-chat-msg--ai'}"><span class="msg-text">${esc(data.body)}</span></div>`;
+      html += `<span class="chat-msg__time">${data.created_at}</span>`;
+      wrap.innerHTML = html;
+      box.appendChild(wrap);
+      box.scrollTop = box.scrollHeight;
+    };
+    ws.onclose = () => setTimeout(connectWS, 2000);
+  }
+
+  function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+
+  connectWS();
+  setTimeout(() => { const b = document.getElementById(boxId); if (b) b.scrollTop = b.scrollHeight; }, 100);
+
+  return {
+    text: '',
+    menu: { visible: false, x: 0, y: 0, msgId: null, msgText: '' },
+    editModal: { visible: false, text: '', msgId: null },
+    showMenu(event, msgId, msgText) {
+      this.menu = { visible: true, x: event.clientX, y: event.clientY, msgId, msgText };
+    },
+    startEdit() {
+      this.editModal = { visible: true, text: this.menu.msgText, msgId: this.menu.msgId };
+      this.menu.visible = false;
+    },
+    async saveEdit() {
+      const { msgId, text } = this.editModal;
+      if (!text.trim()) return;
+      const fd = new FormData();
+      fd.append('body', text.trim());
+      fd.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
+      const r = await fetch(`/chat/message/${msgId}/edit/`, { method: 'POST', body: fd });
+      if (r.ok) {
+        const el = document.getElementById(`cmsg-${msgId}`);
+        if (el) el.querySelector('.msg-text').textContent = text.trim();
+      }
+      this.editModal.visible = false;
+    },
+    send() {
+      if (!this.text.trim() || !ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({ body: this.text.trim() }));
+      this.text = '';
+    }
+  };
+}
+</script>

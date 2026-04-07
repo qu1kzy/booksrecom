@@ -11,7 +11,9 @@
 Персональные рекомендации:
   Собираем «профиль вкуса» из жанров/авторов книг пользователя,
   взвешиваем по частоте встречаемости и рейтингу оценок и sentiment_tag списка,
-  применяем TF-IDF для редких жанров,
+  применяем TF-IDF для редких жанров, temporal decay (свежее = важнее),
+  штрафуем книги из отрицательных списков,
+  MMR-диверсификация: один автор / жанр не заполняет весь топ.
   находим непрочитанные книги с максимальным попаданием.
 
 Коллаборативная фильтрация (also_read):
@@ -22,8 +24,9 @@
 import math
 from django.core.cache import cache
 from django.db.models import Q, Count
+from django.utils import timezone
 
-from .models import Book, UserList, Genre
+from .models import Book, UserList, Genre, ReadingProgress
 from reviews.models import Review
 # Веса по sentiment_tag списка
 _SENTIMENT_WEIGHT = {
@@ -196,46 +199,69 @@ def also_read(book, limit=6):
 
 def recommended_for_user(user, limit=10):
 
-    list_books = (
-        Book.objects
-        .filter(in_lists__user=user)
-        .select_related()
-        .prefetch_related("genres", "authors")
-        .values_list("id", "in_lists__sentiment_tag")
+    # ── 1. Сбор данных из списков пользователя ─────────────────────────────
+    user_lists = (
+        UserList.objects.filter(user=user)
+        .prefetch_related("books__genres", "books__authors")
     )
 
     user_reviews = Review.objects.filter(user=user).values("book_id", "rating")
     reviewed = {r["book_id"]: r["rating"] for r in user_reviews}
     seen_ids = set(reviewed.keys())
 
+    # Исключаем книги, которые пользователь сейчас читает
+    reading_ids = ReadingProgress.objects.filter(
+        user=user, current_page__gt=0
+    ).values_list("book_id", flat=True)
+    seen_ids.update(reading_ids)
+
     genre_weight = {}
     author_weight = {}
+    negative_genres = set()    # жанры из отрицательных списков
+    negative_authors = set()   # авторы из отрицательных списков
 
-    # Взвешиваем по sentiment_tag списка и рейтингу отзыва
-    book_sentiments = {}  # book_id → лучший вес из всех списков
-    for book_id, sentiment in list_books:
-        seen_ids.add(book_id)
-        sw = _SENTIMENT_WEIGHT.get(sentiment or "neutral", 0.4)
-        if sw > book_sentiments.get(book_id, -999):
-            book_sentiments[book_id] = sw
+    now = timezone.now()
 
-    if not book_sentiments and not reviewed:
+    # ── 2. Взвешиваем: sentiment × rating × temporal decay ─────────────────
+    for ul in user_lists:
+        sw = _SENTIMENT_WEIGHT.get(ul.sentiment_tag or "neutral", 0.4)
+
+        # Temporal decay: 5 % затухание в месяц — свежие списки важнее
+        list_age_days = max((now - ul.created_at).days, 0)
+        decay = 0.95 ** (list_age_days / 30)
+
+        for book in ul.books.all():
+            seen_ids.add(book.pk)
+            rating_factor = reviewed.get(book.pk, 5) / 5.0
+            weight = sw * rating_factor * decay
+
+            for g in book.genres.all():
+                genre_weight[g.id] = genre_weight.get(g.id, 0) + weight
+                if ul.sentiment_tag == "negative":
+                    negative_genres.add(g.id)
+            for a in book.authors.all():
+                author_weight[a.id] = author_weight.get(a.id, 0) + weight
+                if ul.sentiment_tag == "negative":
+                    negative_authors.add(a.id)
+
+    if not genre_weight and not author_weight and not reviewed:
         return _cold_start(user, limit)
 
-    anchor_ids = set(book_sentiments.keys()) | set(reviewed.keys())
-    anchors = Book.objects.filter(pk__in=anchor_ids).prefetch_related("genres", "authors")
+    # Учитываем отзывы на книги, которых нет в списках
+    orphan_review_ids = set(reviewed.keys()) - seen_ids
+    if orphan_review_ids:
+        for b in Book.objects.filter(pk__in=orphan_review_ids).prefetch_related("genres", "authors"):
+            seen_ids.add(b.pk)
+            w = 0.4 * (reviewed[b.pk] / 5.0)
+            for g in b.genres.all():
+                genre_weight[g.id] = genre_weight.get(g.id, 0) + w
+            for a in b.authors.all():
+                author_weight[a.id] = author_weight.get(a.id, 0) + w
 
-    for b in anchors:
-        # Рейтинг из отзыва или нейтральный 5/5
-        rating_factor = reviewed.get(b.pk, 5) / 5.0
-        # Вес из sentiment_tag (положительные списки вносят больше, отрицательные — минус)
-        sentiment_w = book_sentiments.get(b.pk, 0.4)
-        weight = sentiment_w * rating_factor
-
-        for g in b.genres.all():
-            genre_weight[g.id] = genre_weight.get(g.id, 0) + weight
-        for a in b.authors.all():
-            author_weight[a.id] = author_weight.get(a.id, 0) + weight
+    # Подписки на авторов — сильный положительный сигнал
+    sub_author_ids = user.author_subscriptions.values_list("author_id", flat=True)
+    for author_id in sub_author_ids:
+        author_weight[author_id] = author_weight.get(author_id, 0) + 1.5
 
     # TF-IDF: редкий жанр ценнее
     idf = _genre_idf()
@@ -245,6 +271,7 @@ def recommended_for_user(user, limit=10):
     if not genre_weight and not author_weight:
         return _cold_start(user, limit)
 
+    # ── 3. Скоринг кандидатов ──────────────────────────────────────────────
     candidates = (
         Book.objects
         .exclude(pk__in=seen_ids)
@@ -253,21 +280,32 @@ def recommended_for_user(user, limit=10):
             Q(authors__id__in=author_weight.keys())
         )
         .distinct()
-        .prefetch_related("authors", "genres")
+        .prefetch_related("authors", "genres", "tags")
     )
 
     scored = []
     for book in candidates:
         score = 0.0
-        for g in book.genres.all():
-            score += genre_weight.get(g.id, 0) * 3
-        for a in book.authors.all():
-            score += author_weight.get(a.id, 0) * 4
-        score += book.avg_rating * 0.5
-        scored.append((score, book))
+        book_genres = {g.id for g in book.genres.all()}
+        book_authors = {a.id for a in book.authors.all()}
 
-    scored.sort(key=lambda x: -x[0])
-    result = [b for _, b in scored[:limit]]
+        for gid in book_genres:
+            score += genre_weight.get(gid, 0) * 3
+        for aid in book_authors:
+            score += author_weight.get(aid, 0) * 4
+
+        # Штраф за пересечение с отрицательными списками
+        neg_overlap = len(book_genres & negative_genres) * 2.0
+        neg_overlap += len(book_authors & negative_authors) * 3.0
+        score -= neg_overlap
+
+        score += book.avg_rating * 0.5
+
+        if score > 0:
+            scored.append((score, book))
+
+    # ── 4. MMR-диверсификация: один автор/жанр не заполняет весь топ ───────
+    result = [b for _, b in _mmr_rerank(scored, limit)]
 
     if len(result) < limit:
         seen_ids = seen_ids | {b.pk for b in result}
@@ -279,6 +317,44 @@ def recommended_for_user(user, limit=10):
         result += extra
 
     return result
+
+
+def _mmr_rerank(scored, limit, lam=0.6):
+    """
+    Maximal Marginal Relevance — жадный отбор с штрафом
+    за похожесть на уже отобранные книги.
+    lam=1 → чистая релевантность, lam=0 → максимальное разнообразие.
+    """
+    if not scored:
+        return []
+    scored.sort(key=lambda x: -x[0])
+    if len(scored) <= limit:
+        return scored
+
+    selected = [scored[0]]
+    remaining = scored[1:]
+
+    while len(selected) < limit and remaining:
+        best_idx, best_mmr = 0, -999.0
+        for i, (score, book) in enumerate(remaining):
+            b_authors = {a.id for a in book.authors.all()}
+            b_genres = {g.id for g in book.genres.all()}
+
+            max_sim = 0.0
+            for _, sel in selected:
+                s_a = {a.id for a in sel.authors.all()}
+                s_g = {g.id for g in sel.genres.all()}
+                a_sim = len(b_authors & s_a) / max(len(b_authors | s_a), 1)
+                g_sim = len(b_genres & s_g) / max(len(b_genres | s_g), 1)
+                max_sim = max(max_sim, 0.5 * a_sim + 0.5 * g_sim)
+
+            mmr = lam * score - (1 - lam) * max_sim * scored[0][0]
+            if mmr > best_mmr:
+                best_mmr, best_idx = mmr, i
+
+        selected.append(remaining.pop(best_idx))
+
+    return selected
 
 
 def _cold_start(user, limit):

@@ -237,11 +237,16 @@ class ReadingProgress(models.Model):
 
 
 class Quote(models.Model):
-    """Цитата из книги, сохранённая пользователем."""
+    """Цитата из книги, сохранённая пользователем или сгенерированная AI."""
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="quotes")
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name="quotes")
     text = models.TextField()
     page_number = models.PositiveIntegerField(null=True, blank=True)
+    is_ai_generated = models.BooleanField(default=False)
+    mood_tag = models.ForeignKey(
+        "MoodTag", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="quotes",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -266,3 +271,39 @@ class PriceAlert(models.Model):
 
     def __str__(self):
         return f"{self.user.username} alert {self.book.title} < {self.threshold}₽"
+
+
+class MoodTag(models.Model):
+    """Структурированный тег настроения/атмосферы книги."""
+    CATEGORY_CHOICES = [
+        ("atmosphere", "Атмосфера"),
+        ("pace", "Темп"),
+        ("emotion", "Эмоция"),
+        ("complexity", "Сложность"),
+    ]
+    name = models.CharField(max_length=50, unique=True)
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
+    icon = models.CharField(max_length=10, blank=True)
+
+    class Meta:
+        ordering = ["category", "name"]
+
+    def __str__(self):
+        return f"{self.icon} {self.name}" if self.icon else self.name
+
+
+class BookMood(models.Model):
+    """Связь книги с mood-тегом (AI-классификация + пользовательские голоса)."""
+    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name="moods")
+    mood = models.ForeignKey(MoodTag, on_delete=models.CASCADE, related_name="book_moods")
+    confidence = models.FloatField(default=1.0)
+    source = models.CharField(max_length=20, default="ai")  # ai / user_vote
+    vote_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["book", "mood"], name="bookmood_unique")
+        ]
+
+    def __str__(self):
+        return f"{self.book.title} — {self.mood.name}"

@@ -46,3 +46,18 @@ def _recalc(book):
     book.avg_rating   = round(stats["avg"] or 0.0, 2)
     book.rating_count = stats["cnt"] or 0
     book.save(update_fields=["avg_rating", "rating_count"])
+
+
+class ReviewLike(models.Model):
+    """Лайк («Полезно») на одобренном отзыве — один пользователь, один отзыв."""
+    user   = models.ForeignKey(User, on_delete=models.CASCADE, related_name="review_likes")
+    review = models.ForeignKey(Review, on_delete=models.CASCADE, related_name="likes")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "review"], name="review_like_unique")
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} → review #{self.review_id}"

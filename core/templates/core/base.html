@@ -10,18 +10,35 @@
 
 <nav class="nav">
   <div class="wrap">
-    <div class="nav__inner">
+    <div class="nav__inner" x-data="{ navOpen: false }">
       <a href="{% url 'home' %}" class="nav__logo">Строка</a>
-      <div class="nav__links">
+      <button class="nav__hamburger" @click="navOpen = !navOpen" aria-label="Меню">
+        <span x-show="!navOpen">&#9776;</span>
+        <span x-show="navOpen" x-cloak>&#10005;</span>
+      </button>
+      <div class="nav__links" :class="{ 'nav__links--open': navOpen }">
         <a href="{% url 'catalog' %}"
            class="nav__link {% if request.resolver_match.url_name == 'catalog' %}nav__link--active{% endif %}">
           Каталог
         </a>
-        <a href="{% url 'public_lists' %}"
-           class="nav__link {% if request.resolver_match.url_name == 'public_lists' %}nav__link--active{% endif %}">
+        <a href="{% url 'collections_list' %}"
+           class="nav__link {% if request.resolver_match.url_name == 'collections_list' %}nav__link--active{% endif %}">
           Подборки
         </a>
+        <a href="{% url 'clubs_list' %}"
+           class="nav__link {% if request.resolver_match.url_name == 'clubs_list' %}nav__link--active{% endif %}">
+          Клубы
+        </a>
         {% if user.is_authenticated %}
+          <a href="{% url 'chat_list' %}"
+             class="nav__link {% if request.resolver_match.url_name == 'chat_list' %}nav__link--active{% endif %}">
+            Сообщения
+          </a>
+          <a href="{% url 'friend_list' %}"
+             class="nav__link {% if request.resolver_match.url_name == 'friend_list' %}nav__link--active{% endif %}"
+             style="position:relative">
+            Друзья{% if social_unread %}<span style="position:absolute;top:-4px;right:-8px;background:var(--err);color:#fff;font-size:10px;min-width:16px;height:16px;border-radius:99px;display:flex;align-items:center;justify-content:center;padding:0 4px">{{ social_unread }}</span>{% endif %}
+          </a>
           <a href="{% url 'profile' %}"
              class="nav__link {% if request.resolver_match.url_name == 'profile' %}nav__link--active{% endif %}">
             {{ user.username }}
@@ -58,8 +75,28 @@
 <main>{% block content %}{% endblock %}</main>
 
 <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
-<script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+<script src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js" defer></script>
 {% if recaptcha_public_key %}<script src="https://www.google.com/recaptcha/api.js" async defer></script>{% endif %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  var obs = new IntersectionObserver(function(entries) {
+    entries.forEach(function(e) {
+      if (e.isIntersecting) {
+        var cls = e.target.className;
+        if (cls.indexOf('reveal-scale') !== -1) e.target.classList.add('reveal-scale--visible');
+        else if (cls.indexOf('reveal-left') !== -1) e.target.classList.add('reveal-left--visible');
+        else if (cls.indexOf('stagger') !== -1) e.target.classList.add('stagger--visible');
+        else e.target.classList.add('reveal--visible');
+        obs.unobserve(e.target);
+      }
+    });
+  }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+  document.querySelectorAll('.reveal, .reveal-scale, .reveal-left, .stagger').forEach(function(el) {
+    obs.observe(el);
+  });
+});
+</script>
 {% block extra_scripts %}{% endblock %}
 </body>
 </html>

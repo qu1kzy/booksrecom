@@ -88,7 +88,7 @@
     {% csrf_token %}
 
     {# ── Основные поля ─────────────────────────────────────────── #}
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+    <div class="form-grid-2col" style="gap:16px;margin-bottom:20px">
 
       <div style="grid-column:1/-1">
         <label class="form-label">Название *</label>
@@ -96,10 +96,19 @@
                value="{{ form_data.title|default:'' }}" placeholder="Название книги">
       </div>
 
-      <div>
+      <div style="grid-column:1/-1">
         <label class="form-label">ISBN</label>
-        <input class="form-input" type="text" name="isbn"
-               value="{{ form_data.isbn|default:'' }}" placeholder="978-...">
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="form-input" type="text" name="isbn" style="flex:1"
+                 value="{{ form_data.isbn|default:'' }}" placeholder="978-..."
+                 hx-get="{% url 'isbn_lookup' %}"
+                 hx-trigger="change, keyup changed delay:800ms"
+                 hx-target="#isbn-preview"
+                 hx-include="[name=isbn]"
+                 hx-indicator="#isbn-spinner">
+          <span id="isbn-spinner" class="htmx-indicator" style="font-size:12px;color:var(--muted)">Поиск...</span>
+        </div>
+        <div id="isbn-preview"></div>
       </div>
 
       <div>

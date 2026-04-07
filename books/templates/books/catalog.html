@@ -2,7 +2,7 @@
 {% block title %}Каталог — Строка{% endblock %}
 
 {% block content %}
-<div class="wrap page" style="padding-top:32px">
+<div class="wrap page" style="padding-top:32px" x-data="{ filtersOpen: false }">
 
   <div class="section-head">
     <h1 class="section-title">Каталог</h1>
@@ -36,10 +36,14 @@
     </select>
   </div>
 
-  <div style="display:grid;grid-template-columns:220px 1fr;gap:32px;align-items:start">
+  <button class="filter-toggle-btn" @click="filtersOpen = !filtersOpen">
+    Фильтры <span x-text="filtersOpen ? '&#9650;' : '&#9660;'"></span>
+  </button>
+
+  <div class="catalog-layout">
 
     {# ── ФИЛЬТРЫ ──────────────────────────────────────────────────────────────── #}
-    <aside style="position:sticky;top:68px">
+    <aside class="catalog-sidebar" :class="{ 'catalog-sidebar--open': filtersOpen }">
       <form id="filter-form" method="get" action="{% url 'catalog' %}">
 
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
@@ -176,6 +180,27 @@
                  hx-get="{% url 'catalog' %}" hx-trigger="change"
                  hx-target="#book-list" hx-include="#filter-form" hx-swap="innerHTML">
         </div>
+
+        {# ---- НАСТРОЕНИЕ ----------------------------------------------------- #}
+        {% if all_moods %}
+        <div style="margin-bottom:8px">
+          <p class="filter-label">Настроение</p>
+          <div style="display:flex;gap:4px;flex-wrap:wrap">
+            {% for mood in all_moods %}
+            <label style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;
+                         border:1px solid var(--border);border-radius:999px;font-size:11px;
+                         cursor:pointer;{% if mood.pk|stringformat:'d' in selected_moods %}background:var(--accent);color:#fff;border-color:var(--accent){% endif %}">
+              <input type="checkbox" name="mood" value="{{ mood.pk }}"
+                     {% if mood.pk|stringformat:'d' in selected_moods %}checked{% endif %}
+                     style="display:none"
+                     hx-get="{% url 'catalog' %}" hx-trigger="change"
+                     hx-target="#book-list" hx-include="#filter-form" hx-swap="innerHTML">
+              {{ mood.icon }} {{ mood.name }}
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
 
       </form>
     </aside>

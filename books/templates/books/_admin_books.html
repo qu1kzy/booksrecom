@@ -1,9 +1,6 @@
 <div style="display:flex;flex-direction:column;gap:6px">
   {% for book in books %}
-  <div id="ab-{{ book.id }}"
-       style="display:grid;grid-template-columns:1fr 180px 60px 80px auto;
-              gap:8px 12px;align-items:center;padding:10px 14px;
-              border:1px solid var(--border);border-radius:var(--radius);background:var(--bg)">
+  <div id="ab-{{ book.id }}" class="admin-book-row">
 
     <div style="min-width:0">
       <div style="font-size:13px;font-weight:600;

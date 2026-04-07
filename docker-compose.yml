@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_DB: bookopolis
       POSTGRES_USER: postgres
@@ -15,10 +16,12 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports: ["6379:6379"]
 
   web:
     build: .
+    restart: unless-stopped
     command: python manage.py runserver 0.0.0.0:8000
     volumes: [.:/app, media_data:/app/media]
     ports: ["8000:8000"]
@@ -29,7 +32,16 @@ services:
 
   celery:
     build: .
+    restart: unless-stopped
     command: celery -A config worker -l info
+    volumes: [.:/app]
+    env_file: .env
+    depends_on: [web, redis]
+
+  celery-beat:
+    build: .
+    restart: unless-stopped
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
     volumes: [.:/app]
     env_file: .env
     depends_on: [web, redis]

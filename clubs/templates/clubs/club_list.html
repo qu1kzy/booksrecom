@@ -1,0 +1,37 @@
+{% extends "core/base.html" %}
+{% block title %}Книжные клубы — Строка{% endblock %}
+
+{% block content %}
+<div class="wrap page" style="padding-top:32px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px">
+    <h1 style="font-size:22px">Книжные клубы</h1>
+    {% if user.is_authenticated %}
+      <a href="{% url 'club_create' %}" class="btn btn-primary btn-sm">+ Создать клуб</a>
+    {% endif %}
+  </div>
+
+  <div class="club-grid">
+    {% for club in clubs %}
+    <a href="{% url 'club_detail' club.pk %}" class="club-card">
+      <div class="club-card__title">{{ club.name }}</div>
+      {% if club.description %}
+        <div class="club-card__desc">{{ club.description }}</div>
+      {% endif %}
+      <div class="club-card__meta">
+        <span>{{ club.num_members }} участник{{ club.num_members|pluralize:"ов,а,ов" }}</span>
+        {% with current=club.club_books.all|dictsort:"is_current"|last %}
+          {% if current.is_current %}
+            <span>Читают: {{ current.book.title|truncatechars:30 }}</span>
+          {% endif %}
+        {% endwith %}
+        {% if club.pk in my_club_ids %}
+          <span style="color:var(--accent);font-weight:600">Вы участник</span>
+        {% endif %}
+      </div>
+    </a>
+    {% empty %}
+    <p class="empty" style="grid-column:1/-1;text-align:center;padding:48px 0">Клубов пока нет</p>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

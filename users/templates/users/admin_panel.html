@@ -4,9 +4,12 @@
 {% block content %}
 <div class="wrap page" style="padding-top:32px">
 
-  <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:20px">
-    <h1 style="font-size:22px">Панель администратора</h1>
-    <div style="display:flex;gap:24px;font-size:13px;color:var(--muted)">
+  <div class="admin-header">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <h1 style="font-size:22px">Панель администратора</h1>
+      <a href="{% url 'graph_admin' %}" class="btn btn-ghost btn-sm">Граф связей →</a>
+    </div>
+    <div class="admin-stats-row">
       <span><b style="font-size:18px;font-family:'Mltsvfont';color:var(--ink)">{{ stat_books }}</b> книг</span>
       <span><b style="font-size:18px;font-family:'Mltsvfont';color:var(--ink)">{{ stat_users }}</b> польз.</span>
       <span><b style="font-size:18px;font-family:'Mltsvfont';color:var(--ink)">{{ stat_reviews }}</b> отзывов</span>
@@ -25,7 +28,7 @@
     </div>
 
     {# ОБЗОР #}
-    <div x-show="tab==='overview'" x-cloak style="display:grid;grid-template-columns:1fr 1fr;gap:32px">
+    <div x-show="tab==='overview'" x-cloak class="home-grid">
       <div>
         <p style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px">Популярные книги</p>
         {% for book in popular_books %}
@@ -37,7 +40,7 @@
         {% endfor %}
       </div>
       <div>
-        <p style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;margin-top:60px">Частые запросы</p>
+        <p style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px">Частые запросы</p>
         {% for item in popular_queries %}
         <div style="display:flex;gap:10px;padding:8px 0;font-size:13px;align-items:center">
           <span style="color:var(--ghost);min-width:20px">{{ forloop.counter }}.</span>

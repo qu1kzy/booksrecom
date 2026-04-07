@@ -1,0 +1,21 @@
+{% extends "core/base.html" %}
+{% block title %}Создать клуб — Строка{% endblock %}
+
+{% block content %}
+<div class="wrap page" style="padding-top:32px;max-width:520px;margin:0 auto">
+  <h1 style="font-size:22px;margin-bottom:24px">Создать книжный клуб</h1>
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <label class="form-label">Название</label>
+    <input class="form-input" type="text" name="name" required
+           style="width:100%;margin-bottom:16px" placeholder="Клуб любителей фантастики">
+    <label class="form-label">Описание</label>
+    <textarea class="form-input" name="description" rows="3"
+              style="width:100%;margin-bottom:16px" placeholder="О чём этот клуб..."></textarea>
+    <label class="form-label">Обложка (необязательно)</label>
+    <input class="form-input" type="file" name="cover_image" accept="image/*"
+           style="margin-bottom:24px">
+    <button type="submit" class="btn btn-primary">Создать</button>
+  </form>
+</div>
+{% endblock %}

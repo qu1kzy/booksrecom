@@ -46,6 +46,7 @@
       <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;
                     cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)">
         <input type="checkbox" name="{{ widget_type }}" value="{{ item.pk }}"
+               {% if form_id %}form="{{ form_id }}"{% endif %}
                :checked="{{ selected_model }}.includes({{ item.pk }})"
                @change="{{ selected_model }}.includes({{ item.pk }})
                  ? {{ selected_model }} = {{ selected_model }}.filter(id => id !== {{ item.pk }})
@@ -61,6 +62,7 @@
         <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;
                       cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)">
           <input type="checkbox" :name="'{{ widget_type }}'" :value="item.id"
+                 {% if form_id %}form="{{ form_id }}"{% endif %}
                  :checked="{{ selected_model }}.includes(item.id)"
                  @change="{{ selected_model }}.includes(item.id)
                    ? {{ selected_model }} = {{ selected_model }}.filter(id => id !== item.id)

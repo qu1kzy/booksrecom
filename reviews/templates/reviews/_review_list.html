@@ -1,14 +1,32 @@
 {% for review in reviews %}
 <div class="review">
   <div class="review__head">
-    <span class="review__user">{{ review.user.username }}</span>
+    <a href="{% url 'user_profile_public' review.user.username %}" class="review__user lnk">{{ review.user.username }}</a>
     <div style="display:flex;gap:12px;align-items:center">
       <span class="review__stars">★{{ review.rating }}</span>
       <span class="review__date">{{ review.created_at|date:"d.m.Y" }}</span>
     </div>
   </div>
   <p class="review__text">{{ review.text }}</p>
+  <div style="margin-top:8px">
+    {% include "reviews/_like_btn.html" with review=review liked=review.user_liked likes_count=review.likes_count %}
+  </div>
 </div>
 {% empty %}
 <p class="empty">Отзывов пока нет</p>
 {% endfor %}
+
+{% if has_more_reviews %}
+<div id="load-more-reviews" style="text-align:center;padding:16px 0">
+  <button class="btn btn-secondary btn-sm"
+          hx-get="{% url 'reviews_page' book.pk %}?page={{ next_page }}"
+          hx-target="#reviews-list"
+          hx-swap="innerHTML"
+          hx-indicator="#reviews-spinner">
+    Показать ещё
+  </button>
+  <span id="reviews-spinner" class="htmx-indicator">
+    <span class="spinner" style="display:inline-block;width:14px;height:14px"></span>
+  </span>
+</div>
+{% endif %}

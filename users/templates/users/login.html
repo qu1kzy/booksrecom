@@ -26,7 +26,10 @@
       {% endif %}
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
         <button type="submit" class="btn btn-primary">Войти</button>
-        <a href="{% url 'register' %}" class="lnk-muted" style="font-size:13px">Нет аккаунта?</a>
+        <div style="display:flex;flex-direction:column;gap:6px;text-align:right">
+          <a href="{% url 'register' %}" class="lnk-muted" style="font-size:13px">Нет аккаунта?</a>
+          <a href="{% url 'password_reset' %}" class="lnk-muted" style="font-size:12px">Забыли пароль?</a>
+        </div>
       </div>
     </form>
   </div>

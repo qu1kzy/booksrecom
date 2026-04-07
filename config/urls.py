@@ -10,4 +10,13 @@ urlpatterns = [
     path("users/",   include("users.urls")),
     path("search/",  include("search.urls")),
     path("reviews/", include("reviews.urls")),
+    path("social/",       include("social.urls")),
+    path("collections/",  include("curated.urls")),
+    path("graph/",        include("graph.urls")),
+    path("ai-chat/",      include("ai_chat.urls")),
+    path("clubs/",        include("clubs.urls")),
+    path("chat/",         include("chat.urls")),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+handler404 = "core.views.custom_404"
+handler500 = "core.views.custom_500"

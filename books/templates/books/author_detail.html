@@ -3,7 +3,7 @@
 
 {% block content %}
 <div class="wrap page" style="padding-top:32px"
-     x-data="{ editing: false }">
+     x-data="{ editing: false, filtersOpen: false }">
 
   <a href="{% url 'catalog' %}" class="lnk-muted" style="font-size:12px;display:inline-block;margin-bottom:20px">← Каталог</a>
 
@@ -110,8 +110,12 @@
     </select>
   </div>
 
-  <div style="display:grid;grid-template-columns:200px 1fr;gap:32px;align-items:start">
-    <aside style="position:sticky;top:68px">
+  <button class="filter-toggle-btn" @click="filtersOpen = !filtersOpen">
+    Фильтры <span x-text="filtersOpen ? '&#9650;' : '&#9660;'"></span>
+  </button>
+
+  <div class="catalog-layout">
+    <aside class="catalog-sidebar" :class="{ 'catalog-sidebar--open': filtersOpen }">
       <form id="filter-form" method="get" action="{% url 'author_detail' author.id %}">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
           <span class="filter-label">Фильтры</span>

@@ -21,6 +21,11 @@
         {% if field.errors %}<p class="form-error">{{ field.errors.0 }}</p>{% endif %}
       </div>
       {% endfor %}
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input class="form-input" type="email" name="email" required
+               placeholder="you@example.com" autocomplete="email">
+      </div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
         <button type="submit" class="btn btn-primary">Зарегистрироваться</button>
         <a href="{% url 'login' %}" class="lnk-muted" style="font-size:13px">Уже есть аккаунт?</a>

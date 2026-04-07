@@ -1,0 +1,131 @@
+{% extends "core/base.html" %}
+{% block title %}{{ target_user.username }} — Строка{% endblock %}
+
+{% block content %}
+<div class="wrap page" style="padding-top:32px">
+
+  {# ── ШАПКА ─────────────────────────────────────────────────────────────────── #}
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;
+              gap:16px;flex-wrap:wrap;margin-bottom:20px">
+    <div>
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
+        <h1 style="font-size:22px">{{ target_user.username }}</h1>
+        {% if target_user.is_staff %}
+          <span class="badge badge-admin">Администратор</span>
+        {% endif %}
+      </div>
+      <span style="font-size:12px;color:var(--ghost)">
+        На сайте с {{ target_user.date_joined|date:"d.m.Y" }}
+      </span>
+    </div>
+    {% if is_own_profile %}
+      <a href="{% url 'profile' %}" class="btn btn-secondary btn-sm">
+        Редактировать профиль
+      </a>
+    {% elif user.is_authenticated %}
+      <div style="display:flex;gap:8px;flex-shrink:0">
+        {% include "social/_friend_btn.html" with target_user=target_user %}
+        <a href="{% url 'chat_dm' target_user.pk %}" class="btn btn-secondary btn-sm">Написать</a>
+      </div>
+    {% endif %}
+  </div>
+
+  {% if target_profile and target_profile.bio %}
+    <p style="font-size:14px;color:var(--muted);margin-bottom:16px;
+              max-width:520px;line-height:1.6">{{ target_profile.bio }}</p>
+  {% endif %}
+
+  {# ── ЖАНРЫ ─────────────────────────────────────────────────────────────────── #}
+  {% if target_profile %}
+    {% with genres=target_profile.favorite_genres.all %}
+      {% if genres %}
+        <div style="margin-bottom:20px">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);
+                      text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">
+            Любимые жанры
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            {% for g in genres %}
+              <span class="tag">{{ g.name }}</span>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+    {% endwith %}
+  {% endif %}
+
+  <hr class="divider" style="margin-bottom:0">
+
+  <div x-data="{ tab: 'lists' }">
+    <div class="tabs">
+      <button class="tab" :class="{'tab--active': tab==='lists'}"   @click="tab='lists'">
+        Публичные списки
+        {% if public_lists %}
+          <span style="font-size:11px;color:var(--ghost);margin-left:4px">{{ public_lists|length }}</span>
+        {% endif %}
+      </button>
+      <button class="tab" :class="{'tab--active': tab==='reviews'}" @click="tab='reviews'">
+        Отзывы
+        {% if approved_reviews %}
+          <span style="font-size:11px;color:var(--ghost);margin-left:4px">{{ approved_reviews|length }}</span>
+        {% endif %}
+      </button>
+    </div>
+
+    {# ── СПИСКИ ─────────────────────────────────────────────────────────────── #}
+    <div x-show="tab==='lists'" x-cloak>
+      {% for ul in public_lists %}
+        <div style="padding:16px 0;border-bottom:1px solid var(--border)">
+          <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+            <span style="font-weight:600;font-size:15px">{{ ul.name }}</span>
+            {% if ul.sentiment_tag == "positive" %}
+              <span style="font-size:11px;background:#dcfce7;color:#166534;padding:2px 8px;border-radius:999px">👍 нравится</span>
+            {% elif ul.sentiment_tag == "wishlist" %}
+              <span style="font-size:11px;background:#eff6ff;color:#1d4ed8;padding:2px 8px;border-radius:999px">📖 хочу прочитать</span>
+            {% endif %}
+            <span style="font-size:12px;color:var(--ghost)">{{ ul.book_count }} книг</span>
+          </div>
+          {% if ul.books.all %}
+            {% for book in ul.books.all %}
+              <div style="display:flex;align-items:center;gap:12px;padding:6px 0">
+                <a href="{% url 'book_detail' book.id %}" class="lnk"
+                   style="font-size:13px;font-weight:500;flex:1">{{ book.title }}</a>
+                <span style="font-size:12px;color:var(--muted)">
+                  {% for a in book.authors.all %}{{ a.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                </span>
+              </div>
+            {% endfor %}
+          {% else %}
+            <p class="empty">Список пуст</p>
+          {% endif %}
+        </div>
+      {% empty %}
+        <p class="empty" style="padding:40px 0;text-align:center">
+          Публичных списков нет
+        </p>
+      {% endfor %}
+    </div>
+
+    {# ── ОТЗЫВЫ ─────────────────────────────────────────────────────────────── #}
+    <div x-show="tab==='reviews'" x-cloak>
+      {% for r in approved_reviews %}
+        <div style="padding:14px 0;border-bottom:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px;gap:8px;flex-wrap:wrap">
+            <a href="{% url 'book_detail' r.book.id %}" class="lnk"
+               style="font-weight:600">{{ r.book.title }}</a>
+            <span style="font-size:12px;color:var(--muted)">
+              ★{{ r.rating }} · {{ r.created_at|date:"d.m.Y" }}
+            </span>
+          </div>
+          <p style="font-size:13px;color:var(--muted)">{{ r.text }}</p>
+        </div>
+      {% empty %}
+        <p class="empty" style="padding:40px 0;text-align:center">
+          Отзывов пока нет
+        </p>
+      {% endfor %}
+    </div>
+
+  </div>
+</div>
+{% endblock %}

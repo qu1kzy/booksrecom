@@ -1,0 +1,63 @@
+{% extends "core/base.html" %}
+{% block title %}Найти книгу — Строка{% endblock %}
+
+{% block content %}
+<div class="wrap page" style="max-width:700px;padding-top:32px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+    <h1 style="font-size:22px;margin:0">Найти книгу с AI</h1>
+    {% if chat %}
+    <form method="post" action="{% url 'discovery_clear' %}">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-ghost btn-sm"
+              hx-post="{% url 'discovery_clear' %}"
+              hx-target="#discovery-messages"
+              hx-swap="innerHTML"
+              hx-headers='{"X-CSRFToken":"{{ csrf_token }}"}'>
+        Очистить
+      </button>
+    </form>
+    {% endif %}
+  </div>
+
+  <p style="font-size:13px;color:var(--muted);margin-bottom:20px">
+    Опишите, что хотите прочитать — жанр, настроение, похожие книги, тему. AI подберёт книги из каталога.
+  </p>
+
+  {# Чат #}
+  <div id="discovery-messages"
+       style="min-height:200px;margin-bottom:16px">
+    {% if messages %}
+      {% for msg in messages %}
+      <div style="margin-bottom:12px;{% if msg.role == 'user' %}text-align:right{% endif %}">
+        <div style="display:inline-block;max-width:85%;padding:10px 14px;border-radius:12px;
+                    font-size:13px;line-height:1.5;text-align:left;
+                    {% if msg.role == 'user' %}background:var(--accent);color:#fff{% else %}background:var(--surface){% endif %}">
+          {{ msg.content|linebreaksbr }}
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <p style="font-size:13px;color:var(--ghost);text-align:center;padding:40px 0">
+        Начните диалог. Например: «Хочу что-то уютное и лёгкое, как Гарри Поттер»
+      </p>
+    {% endif %}
+  </div>
+
+  {# Форма ввода #}
+  <form hx-post="{% url 'discovery_send' %}"
+        hx-target="#discovery-messages"
+        hx-swap="beforeend"
+        hx-headers='{"X-CSRFToken":"{{ csrf_token }}"}'
+        hx-indicator="#disc-spinner"
+        hx-on::after-request="this.querySelector('input[name=message]').value='';"
+        style="display:flex;gap:8px">
+    <input class="form-input" type="text" name="message"
+           placeholder="Опишите, какую книгу ищете..."
+           autocomplete="off" required
+           style="flex:1">
+    <button type="submit" class="btn btn-primary">Найти</button>
+    <span id="disc-spinner" class="htmx-indicator"
+          style="font-size:12px;color:var(--muted);align-self:center">Думаю...</span>
+  </form>
+</div>
+{% endblock %}

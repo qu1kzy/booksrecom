@@ -1,0 +1,9 @@
+{% for msg in messages %}
+  <div class="chat-msg {% if msg.user == user %}chat-msg--own{% endif %}">
+    {% if msg.user != user %}
+      <span class="chat-msg__author">{{ msg.user.username }}</span>
+    {% endif %}
+    <span class="chat-msg__body">{{ msg.body }}</span>
+    <span class="chat-msg__time">{{ msg.created_at|date:"H:i" }}</span>
+  </div>
+{% endfor %}

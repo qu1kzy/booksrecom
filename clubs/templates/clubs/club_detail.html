@@ -1,0 +1,101 @@
+{% extends "core/base.html" %}
+{% block title %}{{ club.name }} — Строка{% endblock %}
+
+{% block content %}
+<div class="wrap page" style="padding-top:32px">
+
+  {# ── ШАПКА ────────────────────────────────────────────────────────────────── #}
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;
+              gap:16px;flex-wrap:wrap;margin-bottom:20px">
+    <div>
+      <a href="{% url 'clubs_list' %}" class="lnk-muted" style="font-size:13px">&larr; Клубы</a>
+      <h1 style="font-size:22px;margin-top:4px">{{ club.name }}</h1>
+      {% if club.description %}
+        <p style="font-size:14px;color:var(--muted);margin-top:6px;max-width:500px">{{ club.description }}</p>
+      {% endif %}
+    </div>
+    <div style="display:flex;gap:8px">
+      {% if membership %}
+        {% if membership.role == "owner" %}
+          <form method="post" action="{% url 'club_delete' club.pk %}">
+            {% csrf_token %}
+            <button class="btn btn-ghost btn-sm"
+                    onclick="return confirm('Удалить клуб?')">Удалить</button>
+          </form>
+        {% else %}
+          <form method="post" action="{% url 'club_leave' club.pk %}">
+            {% csrf_token %}
+            <button class="btn btn-secondary btn-sm">Покинуть</button>
+          </form>
+        {% endif %}
+      {% elif user.is_authenticated %}
+        <form method="post" action="{% url 'club_join' club.pk %}">
+          {% csrf_token %}
+          <button class="btn btn-primary btn-sm">Вступить</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ── ТАБЫ ─────────────────────────────────────────────────────────────────── #}
+  <div x-data="{ tab: '{% if membership and chat_room %}chat{% else %}books{% endif %}' }">
+    <div class="tabs">
+      {% if membership and chat_room %}
+        <button class="tab" :class="{'tab--active': tab==='chat'}" @click="tab='chat'">Чат</button>
+      {% endif %}
+      <button class="tab" :class="{'tab--active': tab==='books'}" @click="tab='books'">Книги</button>
+      <button class="tab" :class="{'tab--active': tab==='members'}" @click="tab='members'">
+        Участники ({{ memberships|length }})
+      </button>
+    </div>
+
+    {# ── ЧАТ ──────────────────────────────────────────────────────────────── #}
+    {% if membership and chat_room %}
+    <div x-show="tab==='chat'" x-cloak>
+      {% include "chat/_chat_widget.html" with room=chat_room %}
+    </div>
+    {% endif %}
+
+    {# ── КНИГИ ────────────────────────────────────────────────────────────── #}
+    <div x-show="tab==='books'" x-cloak>
+      <div id="club-books-list">
+        {% include "clubs/_club_books_list.html" %}
+      </div>
+
+      {% if membership and membership.role in "owner,admin" %}
+      <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+        <p style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;
+                  letter-spacing:.05em;margin-bottom:10px">Добавить книгу</p>
+        <input class="form-input" type="text" placeholder="Поиск книги..."
+               hx-get="{% url 'club_search_books' club.pk %}"
+               hx-trigger="input changed delay:300ms"
+               hx-target="#club-book-search"
+               hx-swap="innerHTML"
+               name="q" autocomplete="off"
+               style="max-width:340px;margin-bottom:8px"
+               hx-on::load="htmx.trigger(this, 'htmx:load')">
+        <div id="club-book-search"
+             hx-get="{% url 'club_search_books' club.pk %}"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+          <span class="spinner"></span>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    {# ── УЧАСТНИКИ ────────────────────────────────────────────────────────── #}
+    <div x-show="tab==='members'" x-cloak>
+      {% for ms in memberships %}
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
+        <a href="{% url 'user_profile_public' ms.user.username %}" class="lnk"
+           style="font-size:14px;font-weight:500;flex:1">{{ ms.user.username }}</a>
+        <span class="badge {% if ms.role == 'owner' %}badge-admin{% endif %}"
+              style="font-size:11px">{{ ms.get_role_display }}</span>
+        <span style="font-size:11px;color:var(--ghost)">{{ ms.joined_at|date:"d.m.Y" }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

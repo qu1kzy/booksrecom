@@ -1,24 +1,55 @@
 from django.shortcuts import render, get_object_or_404, redirect
-from django.contrib.auth.decorators import login_required, user_passes_test
+from django.contrib.auth.decorators import login_required
 from django.contrib import messages
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse, Http404, HttpResponseBadRequest
 from django.core.paginator import Paginator
 from django.conf import settings
-from django.db.models import Q, Min, Max
-from django.utils import timezone
+from django.db.models import Q, Min, Max, Avg, Count, Exists, OuterRef
+from django.db.models.functions import TruncDate
+from django.views.decorators.http import require_GET, require_POST, require_http_methods
+from django.core.exceptions import PermissionDenied
 
-from .models import Book, Genre, UserList, Store, BookStore, Language, Author
+import requests as http_req
+from celery.result import AsyncResult
 
+from .models import (
+    Book, Genre, UserList, Store, BookStore, Language, Author,
+    BookPrice, ReadingProgress, Quote, PriceAlert, Publisher, Series,
+    MoodTag, BookMood,
+)
+from reviews.models import Review, ReviewLike
+from .recommendations import similar_books as get_similar, also_read as get_also_read
+from users.models import AuthorSubscription
+from .ai_recommendations import invalidate as invalidate_ai_cache
+from .tasks import scrape_book_prices, generate_smart_quotes
+from .isbn_lookup import lookup_by_isbn
+from .reading_pace import predict_reading_time
 
-# ── Каталог ───────────────────────────────────────────────────────────────────
+# ─── ДЕКОРАТОРЫ ───────────────────────────────────────────────────────────────
 
-def catalog(request):
-    qs = Book.objects.prefetch_related("authors", "genres").select_related("publisher", "language")
+def staff_required(view_func):
+    """Декоратор, разрешающий доступ только персоналу (staff)."""
+    def _wrapped(request, *args, **kwargs):
+        if not request.user.is_staff:
+            raise PermissionDenied
+        return view_func(request, *args, **kwargs)
+    return _wrapped
 
-    g = request.GET
+# ─── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ─────────────────────────────────────────────────
+
+def _filter_books(params, base_qs=None):
+    """
+    Применяет фильтры из GET-параметров к queryset книг.
+    Возвращает (qs, filter_context), где filter_context — словарь с
+    выбранными значениями фильтров для передачи в шаблон.
+    """
+    if base_qs is None:
+        qs = Book.objects.prefetch_related("authors", "genres").select_related("publisher", "language")
+    else:
+        qs = base_qs
 
     # Текстовый поиск
-    search = g.get("search", "").strip()
+    search = params.get("search", "").strip()
     if search:
         qs = qs.filter(
             Q(title__icontains=search)
@@ -28,44 +59,40 @@ def catalog(request):
             | Q(isbn__iexact=search)
         ).distinct()
 
-    # Мультиселект: жанры
-    genre_ids = g.getlist("genre")
+    # Мультиселекты
+    genre_ids = params.getlist("genre")
+    for gid in genre_ids:
+        qs = qs.filter(genres__id=gid)
     if genre_ids:
-        for gid in genre_ids:
-            qs = qs.filter(genres__id=gid)
         qs = qs.distinct()
 
-    # Мультиселект: авторы
-    author_ids = g.getlist("author")
+    author_ids = params.getlist("author")
+    for aid in author_ids:
+        qs = qs.filter(authors__id=aid)
     if author_ids:
-        for aid in author_ids:
-            qs = qs.filter(authors__id=aid)
         qs = qs.distinct()
 
-    # Мультиселект: языки
-    language_ids = g.getlist("language")
+    language_ids = params.getlist("language")
     if language_ids:
         qs = qs.filter(language__id__in=language_ids)
 
-    # Диапазон: год публикации
-    year_from = g.get("year_from", "").strip()
-    year_to   = g.get("year_to",   "").strip()
+    # Диапазоны
+    year_from = params.get("year_from", "").strip()
+    year_to   = params.get("year_to", "").strip()
     if year_from.isdigit():
         qs = qs.filter(publication_year__gte=int(year_from))
     if year_to.isdigit():
         qs = qs.filter(publication_year__lte=int(year_to))
 
-    # Диапазон: страниц
-    pages_from = g.get("pages_from", "").strip()
-    pages_to   = g.get("pages_to",   "").strip()
+    pages_from = params.get("pages_from", "").strip()
+    pages_to   = params.get("pages_to", "").strip()
     if pages_from.isdigit():
         qs = qs.filter(pages__gte=int(pages_from))
     if pages_to.isdigit():
         qs = qs.filter(pages__lte=int(pages_to))
 
-    # Диапазон: средняя цена
-    price_from = g.get("price_from", "").strip()
-    price_to   = g.get("price_to",   "").strip()
+    price_from = params.get("price_from", "").strip()
+    price_to   = params.get("price_to", "").strip()
     if price_from:
         try:
             qs = qs.filter(avg_price__gte=float(price_from))
@@ -77,27 +104,200 @@ def catalog(request):
         except ValueError:
             pass
 
-    # Рейтинг минимум (слайдер)
-    rating_min = g.get("rating_min", "").strip()
+    rating_min = params.get("rating_min", "").strip()
     if rating_min:
         try:
             qs = qs.filter(avg_rating__gte=float(rating_min))
         except ValueError:
             pass
 
+    # Mood-фильтр
+    mood_ids = params.getlist("mood")
+    if mood_ids:
+        qs = qs.filter(moods__mood_id__in=mood_ids).distinct()
+
     # Сортировка
-    ordering = g.get("ordering", "-avg_rating")
+    ordering = params.get("ordering", "-avg_rating")
     if ordering in {"-avg_rating", "-rating_count", "-publication_year",
                     "publication_year", "avg_price", "-avg_price"}:
         qs = qs.order_by(ordering)
 
+    # Контекст для шаблона (выбранные значения)
+    filter_ctx = {
+        "search": search,
+        "selected_genres": genre_ids,
+        "selected_authors": author_ids,
+        "selected_languages": language_ids,
+        "selected_moods": mood_ids,
+        "year_from": year_from,
+        "year_to": year_to,
+        "pages_from": pages_from,
+        "pages_to": pages_to,
+        "price_from": price_from,
+        "price_to": price_to,
+        "rating_min": rating_min,
+        "ordering": ordering,
+    }
+    return qs, filter_ctx
+
+def _get_book_detail_context(book, request):
+    # Одобренные рецензии — аннотированы лайками, отсортированы по популярности
+    _like_filter = (
+        ReviewLike.objects.filter(review=OuterRef("pk"), user=request.user)
+        if request.user.is_authenticated
+        else ReviewLike.objects.none()
+    )
+    REVIEWS_PER_PAGE = 5
+    reviews_qs = (
+        Review.objects
+        .filter(book=book, status=Review.APPROVED)
+        .select_related("user")
+        .annotate(
+            likes_count=Count("likes", distinct=True),
+            user_liked=Exists(_like_filter),
+        )
+        .order_by("-likes_count", "-created_at")
+    )
+    review_count = reviews_qs.count()
+    reviews = reviews_qs[:REVIEWS_PER_PAGE]
+    has_more_reviews = review_count > REVIEWS_PER_PAGE
+    user_has_review = reviews_qs.filter(user=request.user).exists() if request.user.is_authenticated else False
+
+    # Списки пользователя
+    user_lists = []
+    book_list_ids = set()
+    if request.user.is_authenticated:
+        user_lists = UserList.objects.filter(user=request.user)
+        book_list_ids = set(user_lists.filter(books=book).values_list("id", flat=True))
+
+    # Ссылки на магазины
+    store_links = list(book.store_links.select_related("store").filter(store__is_active=True))
+    linked_ids = {sl.store_id for sl in store_links}
+    unlinked_stores = [s for s in Store.objects.filter(is_active=True) if s.id not in linked_ids]
+
+    # Данные для инлайн-редактирования (только staff)
+    edit_author_ids = "[" + ",".join(str(a.pk) for a in book.authors.all()) + "]"
+    edit_genre_ids  = "[" + ",".join(str(g.pk) for g in book.genres.all()) + "]"
+
+    # Прогресс чтения и алерт цены текущего пользователя
+    reading_progress = None
+    user_price_alert = None
+    reading_prediction = None
+    if request.user.is_authenticated:
+        reading_progress = ReadingProgress.objects.filter(user=request.user, book=book).first()
+        user_price_alert = PriceAlert.objects.filter(user=request.user, book=book).first()
+        reading_prediction = predict_reading_time(request.user, book)
+
+    return {
+        "book": book,
+        "reviews": reviews,
+        "review_count": review_count,
+        "has_more_reviews": has_more_reviews,
+        "next_page": 2,
+        "user_lists": user_lists,
+        "book_list_ids": book_list_ids,
+        "store_links": store_links,
+        "unlinked_stores": unlinked_stores,
+        "similar": get_similar(book, limit=5),
+        "also_read": get_also_read(book, limit=6),
+        "user_has_review": user_has_review,
+        "active_tab": request.GET.get("tab", "about"),
+        "quotes": Quote.objects.filter(book=book).select_related("user", "mood_tag"),
+        "quotes_count": Quote.objects.filter(book=book).count(),
+        "moods": BookMood.objects.filter(book=book).select_related("mood").order_by("-confidence", "-vote_count"),
+        "reading_progress": reading_progress,
+        "reading_prediction": reading_prediction,
+        "user_price_alert": user_price_alert,
+        "all_authors": Author.objects.order_by("name"),
+        "all_genres": Genre.objects.order_by("name"),
+        "all_languages": Language.objects.order_by("name"),
+        "all_publishers": Publisher.objects.order_by("name"),
+        "all_series": Series.objects.order_by("name"),
+        "edit_author_ids": edit_author_ids,
+        "edit_genre_ids": edit_genre_ids,
+        "edit_publisher_id": book.publisher_id,
+        "edit_publisher_name": book.publisher.name if book.publisher else "",
+        "edit_series_id": book.series_id,
+        "edit_series_name": book.series.name if book.series else "",
+    }
+
+def _get_author_detail_context(author, request):
+    """Собирает контекст для страницы автора."""
+    params = request.GET
+    base_qs = author.books.prefetch_related("authors", "genres").select_related("publisher", "language")
+    qs, filter_ctx = _filter_books(params, base_qs)
+
     paginator = Paginator(qs, settings.BOOKS_PER_PAGE)
-    page      = paginator.get_page(g.get("page", 1))
+    page = paginator.get_page(params.get("page", 1))
 
-    params = request.GET.copy()
-    params.pop("page", None)
+    # Убираем page из query_string для ссылок пагинации
+    query_dict = params.copy()
+    query_dict.pop("page", None)
+    query_string = query_dict.urlencode()
 
-    # Агрегаты для диапазонов
+    # Агрегаты для слайдеров
+    agg = author.books.aggregate(
+        min_year=Min("publication_year"),
+        max_year=Max("publication_year"),
+    )
+
+    # Подписка
+    is_subscribed = False
+    if request.user.is_authenticated:
+        is_subscribed = AuthorSubscription.objects.filter(user=request.user, author=author).exists()
+
+    # Все жанры, в которых есть книги этого автора
+    all_genres = Genre.objects.filter(books__authors=author).distinct()
+
+    has_filters = any([
+        filter_ctx["search"], filter_ctx["selected_genres"],
+        filter_ctx["year_from"], filter_ctx["year_to"],
+        filter_ctx["rating_min"]
+    ])
+
+    return {
+        "author": author,
+        "books": page,
+        "total": paginator.count,
+        "query_string": query_string,
+        "has_filters": has_filters,
+        "all_genres": all_genres,
+        "selected_genres": filter_ctx["selected_genres"],
+        "agg": agg,
+        "f": params,
+        "is_subscribed": is_subscribed,
+    }
+
+def _inline_create(request, model_class, name_field="name"):
+    """
+    Общая функция для создания объекта через AJAX.
+    Принимает POST-запрос с полем name_field, возвращает JSON.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    name = request.POST.get(name_field, "").strip()
+    if not name:
+        return JsonResponse({"error": f"Поле {name_field} обязательно"}, status=400)
+    obj, created = model_class.objects.get_or_create(**{name_field: name})
+    return JsonResponse({"id": obj.pk, "name": getattr(obj, name_field), "created": created})
+
+# ─── КАТАЛОГ ─────────────────────────────────────────────────────────────────
+
+@require_GET
+def catalog(request):
+    params = request.GET
+    qs, filter_ctx = _filter_books(params)
+
+    # Пагинация
+    paginator = Paginator(qs, settings.BOOKS_PER_PAGE)
+    page = paginator.get_page(params.get("page", 1))
+
+    # Убираем page из query_string
+    query_dict = params.copy()
+    query_dict.pop("page", None)
+    query_string = query_dict.urlencode()
+
+    # Агрегаты для диапазонов (глобальные минимумы/максимумы)
     agg = Book.objects.aggregate(
         min_year=Min("publication_year"), max_year=Max("publication_year"),
         min_pages=Min("pages"), max_pages=Max("pages"),
@@ -105,110 +305,56 @@ def catalog(request):
     )
 
     has_filters = any([
-        search, genre_ids, author_ids, language_ids,
-        year_from, year_to, pages_from, pages_to,
-        price_from, price_to, rating_min,
+        filter_ctx["search"], filter_ctx["selected_genres"],
+        filter_ctx["selected_authors"], filter_ctx["selected_languages"],
+        filter_ctx["selected_moods"],
+        filter_ctx["year_from"], filter_ctx["year_to"],
+        filter_ctx["pages_from"], filter_ctx["pages_to"],
+        filter_ctx["price_from"], filter_ctx["price_to"],
+        filter_ctx["rating_min"]
     ])
 
     ctx = {
-        "books":           page,
-        "total":           paginator.count,
-        "query_string":    params.urlencode(),
-        "has_filters":     has_filters,
-        # Данные для фильтров
-        "all_genres":      Genre.objects.all(),
-        "all_authors":     Author.objects.all()[:200],
-        "all_languages":   Language.objects.all(),
-        "selected_genres":   genre_ids,
-        "selected_authors":  author_ids,
-        "selected_languages": language_ids,
+        "books": page,
+        "total": paginator.count,
+        "query_string": query_string,
+        "has_filters": has_filters,
+        "all_genres": Genre.objects.all(),
+        "all_authors": Author.objects.all()[:200],
+        "all_languages": Language.objects.all(),
+        "all_moods": MoodTag.objects.all(),
+        "selected_genres": filter_ctx["selected_genres"],
+        "selected_authors": filter_ctx["selected_authors"],
+        "selected_languages": filter_ctx["selected_languages"],
+        "selected_moods": filter_ctx["selected_moods"],
         "agg": agg,
-        # Текущие значения
-        "f": g,
+        "f": params,
     }
-    if request.htmx:
+    if getattr(request, "htmx", False):
         return render(request, "books/_book_list.html", ctx)
     return render(request, "books/catalog.html", ctx)
 
+# ─── СТРАНИЦА КНИГИ ──────────────────────────────────────────────────────────
 
-
-# ── Страница книги ────────────────────────────────────────────────────────────
-
+@require_GET
 def book_detail(request, pk):
     book = get_object_or_404(
         Book.objects.prefetch_related("authors", "genres", "store_links__store"),
         pk=pk
     )
-    from reviews.models import Review
-    from .recommendations import similar_books as get_similar, also_read as get_also_read
-    from .models import Genre, Author, Language, Publisher, Series, Quote, ReadingProgress, PriceAlert
-    reviews = Review.objects.filter(book=book, status=Review.APPROVED).select_related("user")
+    ctx = _get_book_detail_context(book, request)
 
-    user_lists    = []
-    book_list_ids = set()
-    if request.user.is_authenticated:
-        user_lists    = UserList.objects.filter(user=request.user)
-        book_list_ids = set(
-            UserList.objects.filter(user=request.user, books=book).values_list("id", flat=True)
-        )
+    # Запуск генерации AI-цитат, если их ещё нет
+    if not book.quotes.filter(is_ai_generated=True).exists():
+        generate_smart_quotes.delay(book.pk)
 
-    store_links     = list(book.store_links.select_related("store").filter(store__is_active=True))
-    linked_ids      = {sl.store_id for sl in store_links}
-    unlinked_stores = [s for s in Store.objects.filter(is_active=True) if s.id not in linked_ids]
-
-    # Данные для инлайн-редактирования (только staff)
-    edit_author_ids = "[" + ",".join(str(a.pk) for a in book.authors.all()) + "]"
-    edit_genre_ids  = "[" + ",".join(str(g.pk) for g in book.genres.all()) + "]"
-
-    ctx = {
-        "book":            book,
-        "reviews":         reviews,
-        "review_count":    reviews.count(),
-        "user_lists":      user_lists,
-        "book_list_ids":   book_list_ids,
-        "store_links":     store_links,
-        "unlinked_stores": unlinked_stores,
-        "similar":         get_similar(book, limit=5),
-        "also_read":       get_also_read(book, limit=6),
-        "user_has_review": reviews.filter(user=request.user).exists()
-                           if request.user.is_authenticated else False,
-        "active_tab":      request.GET.get("tab", "about"),
-        # Цитаты
-        "quotes":          Quote.objects.filter(book=book).select_related("user"),
-        "quotes_count":    Quote.objects.filter(book=book).count(),
-        # Прогресс чтения и алерт цены текущего пользователя
-        "reading_progress": (
-            ReadingProgress.objects.filter(user=request.user, book=book).first()
-            if request.user.is_authenticated else None
-        ),
-        "user_price_alert": (
-            PriceAlert.objects.filter(user=request.user, book=book).first()
-            if request.user.is_authenticated else None
-        ),
-        # Для формы редактирования
-        "all_authors":          Author.objects.order_by("name"),
-        "all_genres":           Genre.objects.order_by("name"),
-        "all_languages":        Language.objects.order_by("name"),
-        "all_publishers":       Publisher.objects.order_by("name"),
-        "all_series":           Series.objects.order_by("name"),
-        "edit_author_ids":      edit_author_ids,
-        "edit_genre_ids":       edit_genre_ids,
-        "edit_publisher_id":    book.publisher_id,
-        "edit_publisher_name":  book.publisher.name if book.publisher else "",
-        "edit_series_id":       book.series_id,
-        "edit_series_name":     book.series.name if book.series else "",
-    }
     return render(request, "books/book_detail.html", ctx)
 
-
-# ── Управление списками ────────────────────────────────────────────────────────
+# ─── УПРАВЛЕНИЕ СПИСКАМИ ─────────────────────────────────────────────────────
 
 @login_required
+@require_POST
 def toggle_list(request):
-    """HTMX POST — переключить книгу в списке пользователя."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-
     book = get_object_or_404(Book, pk=request.POST.get("book_id"))
     list_id = request.POST.get("list_id")
     user_list = get_object_or_404(UserList, pk=list_id, user=request.user)
@@ -217,10 +363,17 @@ def toggle_list(request):
         user_list.books.remove(book)
     else:
         user_list.books.add(book)
+        # Событие для ленты
+        from social.models import ActivityEvent
+        ActivityEvent.objects.create(
+            user=request.user,
+            event_type="add_to_list",
+            book=book,
+            metadata={"list_name": user_list.name},
+        )
 
     # Инвалидация AI‑кеша
-    from books.ai_recommendations import invalidate
-    invalidate(request.user.pk)
+    invalidate_ai_cache(request.user.pk)
 
     # Актуальные списки пользователя
     book_list_ids = set(
@@ -228,29 +381,21 @@ def toggle_list(request):
     )
     user_lists = UserList.objects.filter(user=request.user)
 
-    # Возвращаем только внутреннюю часть списка (partial)
     return render(request, "books/_list_dropdown.html", {
         "book": book,
         "user_lists": user_lists,
         "book_list_ids": book_list_ids,
-        "partial": True   # <-- ключевой флаг
+        "partial": True
     })
 
-
-# ── Запрос цены + поллинг ─────────────────────────────────────────────────────
+# ─── ЗАПРОС ЦЕНЫ + ПОЛЛИНГ ───────────────────────────────────────────────────
 
 @login_required
+@require_POST
 def request_price(request, pk):
-    """HTMX POST — проверить reCAPTCHA, запустить задачу, вернуть блок с поллингом."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-
     book = get_object_or_404(Book, pk=pk)
 
-    # ── reCAPTCHA v2 verification ─────────────────────────────────────────────
-    import requests as http_req
-    from django.conf import settings
-
+    # reCAPTCHA v2 verification
     recaptcha_secret = getattr(settings, "RECAPTCHA_PRIVATE_KEY", "")
     if recaptcha_secret:
         token = request.POST.get("g-recaptcha-response", "")
@@ -269,7 +414,6 @@ def request_price(request, pk):
                 "book": book, "pending": False, "captcha_error": True
             })
 
-    from .tasks import scrape_book_prices
     result = scrape_book_prices.delay(book.pk)
     request.session[f"price_task_{book.pk}"] = result.id
 
@@ -277,67 +421,39 @@ def request_price(request, pk):
         "book": book, "pending": True, "task_id": result.id
     })
 
-
 @login_required
+@require_GET
 def price_captcha(request, pk):
-    """GET — показать форму с reCAPTCHA перед запросом цены."""
-    from django.conf import settings as conf
     book = get_object_or_404(Book, pk=pk)
     return render(request, "books/_price_captcha.html", {
         "book": book,
-        "recaptcha_site_key": conf.RECAPTCHA_PUBLIC_KEY,
+        "recaptcha_site_key": settings.RECAPTCHA_PUBLIC_KEY,
     })
 
-
+@require_GET
 def price_status(request, pk):
-    """
-    HTMX GET — опросить статус задачи Celery.
-    Вызывается каждые 2 сек через hx-trigger="every 2s".
-    Когда задача завершена — возвращает финальный блок без поллинга.
-    """
-    book    = get_object_or_404(Book, pk=pk)
+    book = get_object_or_404(Book, pk=pk)
     task_id = request.GET.get("task_id") or request.session.get(f"price_task_{book.pk}")
 
+    done = True
     if task_id:
-        from celery.result import AsyncResult
         result = AsyncResult(task_id)
-        done   = result.ready()
-    else:
-        done = True  # нет задачи — показать текущее состояние
+        done = result.ready()
 
     if done:
-        # Перечитываем книгу из БД — Celery уже записал avg_price
         book.refresh_from_db()
-        return render(request, "books/_price_block.html", {
-            "book": book, "pending": False
-        })
-
-    # Ещё выполняется — вернуть тот же блок с поллингом
+        return render(request, "books/_price_block.html", {"book": book, "pending": False})
     return render(request, "books/_price_block.html", {
         "book": book, "pending": True, "task_id": task_id
     })
 
-
+@require_GET
 def price_chart_data(request, pk):
-    """
-    JSON — данные для графика цен.
-    Агрегируем BookPrice по дням: для каждого магазина отдельная линия
-    + общая средняя.
-    """
-    from django.http import JsonResponse
-    from django.db.models.functions import TruncDate
-    from django.db.models import Avg
-    from .models import BookPrice, BookStore
-
     book = get_object_or_404(Book, pk=pk)
-
-    # По каждому магазину — средняя цена за день
     store_links = BookStore.objects.filter(book=book).select_related("store")
 
     datasets = []
     all_dates = set()
-
-    # Цвета для линий магазинов
     palette = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4"]
 
     for i, link in enumerate(store_links):
@@ -356,10 +472,10 @@ def price_chart_data(request, pk):
         all_dates.update(data.keys())
 
         datasets.append({
-            "label":       link.store.name,
-            "data":        data,
-            "color":       palette[i % len(palette)],
-            "borderDash":  [],
+            "label": link.store.name,
+            "data": data,
+            "color": palette[i % len(palette)],
+            "borderDash": [],
         })
 
     if not all_dates:
@@ -379,255 +495,186 @@ def price_chart_data(request, pk):
     avg_data = {str(r["day"]): float(r["avg"]) for r in avg_rows}
 
     datasets.append({
-        "label":      "Средняя",
-        "data":       avg_data,
-        "color":      "#111111",
+        "label": "Средняя",
+        "data": avg_data,
+        "color": "#111111",
         "borderDash": [6, 3],
     })
 
-    # Нормализуем: для каждого датасета — список значений по labels (None если нет)
+    # Нормализуем: для каждого датасета список значений по labels
     for ds in datasets:
         ds["points"] = [ds["data"].get(l) for l in labels]
         del ds["data"]
 
     return JsonResponse({"labels": labels, "datasets": datasets})
 
+# ─── СТРАНИЦА АВТОРА ─────────────────────────────────────────────────────────
 
-
+@require_GET
 def author_detail(request, pk):
-    from django.db.models import Q, Min, Max
-    from .models import Author, Language
-
     author = get_object_or_404(Author.objects.prefetch_related("books"), pk=pk)
-    g = request.GET
-
-    qs = author.books.prefetch_related("authors", "genres").select_related("publisher", "language")
-
-    # Фильтры — такие же как в каталоге
-    search = g.get("search", "").strip()
-    if search:
-        qs = qs.filter(Q(title__icontains=search) | Q(description__icontains=search))
-
-    genre_ids = g.getlist("genre")
-    if genre_ids:
-        for gid in genre_ids:
-            qs = qs.filter(genres__id=gid)
-        qs = qs.distinct()
-
-    year_from = g.get("year_from", "").strip()
-    year_to   = g.get("year_to",   "").strip()
-    if year_from.isdigit(): qs = qs.filter(publication_year__gte=int(year_from))
-    if year_to.isdigit():   qs = qs.filter(publication_year__lte=int(year_to))
-
-    rating_min = g.get("rating_min", "").strip()
-    if rating_min:
-        try: qs = qs.filter(avg_rating__gte=float(rating_min))
-        except ValueError: pass
-
-    ordering = g.get("ordering", "-avg_rating")
-    if ordering in {"-avg_rating", "-rating_count", "-publication_year", "publication_year"}:
-        qs = qs.order_by(ordering)
-
-    paginator = Paginator(qs, settings.BOOKS_PER_PAGE)
-    page      = paginator.get_page(g.get("page", 1))
-    params    = request.GET.copy(); params.pop("page", None)
-
-    agg = author.books.aggregate(
-        min_year=Min("publication_year"), max_year=Max("publication_year"),
-    )
-
-    # Подписка
-    is_subscribed = False
-    if request.user.is_authenticated:
-        from users.models import AuthorSubscription
-        is_subscribed = AuthorSubscription.objects.filter(
-            user=request.user, author=author
-        ).exists()
-
-    from .models import Genre as GenreModel
-    ctx = {
-        "author":          author,
-        "books":           page,
-        "total":           paginator.count,
-        "query_string":    params.urlencode(),
-        "has_filters":     bool(search or genre_ids or year_from or year_to or rating_min),
-        "all_genres":      GenreModel.objects.filter(books__authors=author).distinct(),
-        "selected_genres": genre_ids,
-        "agg":             agg,
-        "f":               g,
-        "is_subscribed":   is_subscribed,
-    }
-    if request.htmx:
+    ctx = _get_author_detail_context(author, request)
+    if getattr(request, "htmx", False):
         return render(request, "books/_book_list.html", ctx)
     return render(request, "books/author_detail.html", ctx)
 
+# ─── УПРАВЛЕНИЕ ССЫЛКАМИ НА МАГАЗИНЫ (STAFF) ─────────────────────────────────
 
-@login_required
-def toggle_subscribe_author(request, pk):
-    """HTMX POST — подписаться/отписаться от автора."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-    from .models import Author
-    from users.models import AuthorSubscription
-    author = get_object_or_404(Author, pk=pk)
-    sub, created = AuthorSubscription.objects.get_or_create(
-        user=request.user, author=author
-    )
-    if not created:
-        sub.delete()
-        is_subscribed = False
-    else:
-        is_subscribed = True
-    return render(request, "books/_subscribe_btn.html", {
-        "author": author, "is_subscribed": is_subscribed
-    })
-
-
-
-@user_passes_test(lambda u: u.is_staff)
+@staff_required
+@require_POST
 def store_link_save(request, book_id):
-    """HTMX POST — добавить или обновить URL книги в магазине."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-    book  = get_object_or_404(Book, pk=book_id)
+    book = get_object_or_404(Book, pk=book_id)
     store = get_object_or_404(Store, pk=request.POST.get("store_id"))
-    url   = request.POST.get("product_url", "").strip()
+    url = request.POST.get("product_url", "").strip()
     if not url:
-        return HttpResponse(status=400)
+        return HttpResponseBadRequest("URL обязателен")
     BookStore.objects.update_or_create(
         book=book, store=store,
         defaults={"product_url": url},
     )
-    store_links     = list(book.store_links.select_related("store").filter(store__is_active=True))
-    linked_ids      = {sl.store_id for sl in store_links}
-    unlinked_stores = [s for s in Store.objects.filter(is_active=True) if s.id not in linked_ids]
-    return render(request, "books/_store_links.html", {
-        "book": book, "store_links": store_links, "unlinked_stores": unlinked_stores
-    })
+    return _render_store_links(request, book)
 
-
-@user_passes_test(lambda u: u.is_staff)
+@staff_required
+@require_POST
 def store_link_delete(request, book_id, store_id):
-    """HTMX DELETE — убрать связь книги с магазином."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
     BookStore.objects.filter(book_id=book_id, store_id=store_id).delete()
-    book            = get_object_or_404(Book, pk=book_id)
-    store_links     = list(book.store_links.select_related("store").filter(store__is_active=True))
-    linked_ids      = {sl.store_id for sl in store_links}
+    book = get_object_or_404(Book, pk=book_id)
+    return _render_store_links(request, book)
+
+def _render_store_links(request, book):
+    """Рендерит частичный шаблон со ссылками на магазины."""
+    store_links = list(book.store_links.select_related("store").filter(store__is_active=True))
+    linked_ids = {sl.store_id for sl in store_links}
     unlinked_stores = [s for s in Store.objects.filter(is_active=True) if s.id not in linked_ids]
     return render(request, "books/_store_links.html", {
-        "book": book, "store_links": store_links, "unlinked_stores": unlinked_stores
+        "book": book,
+        "store_links": store_links,
+        "unlinked_stores": unlinked_stores,
     })
 
+# ─── ADMIN PARTIALS ───────────────────────────────────────────────────────────
 
-# ── Admin partials ────────────────────────────────────────────────────────────
-
-@user_passes_test(lambda u: u.is_staff)
+@staff_required
+@require_POST
 def admin_delete_book(request, pk):
-    if request.method != "POST":
-        return HttpResponse(status=405)
     get_object_or_404(Book, pk=pk).delete()
     return HttpResponse("")
 
-
-@user_passes_test(lambda u: u.is_staff)
+@staff_required
+@require_GET
 def admin_books_partial(request):
-    q  = request.GET.get("q", "")
+    q = request.GET.get("q", "")
     qs = Book.objects.prefetch_related("authors", "genres")
     if q:
         qs = qs.filter(Q(title__icontains=q) | Q(authors__name__icontains=q)).distinct()
     return render(request, "books/_admin_books.html", {"books": qs[:50]})
 
+# ─── ISBN LOOKUP (STAFF) ─────────────────────────────────────────────────────
 
-# ── Добавление книги администратором ─────────────────────────────────────────
+@staff_required
+@require_GET
+def isbn_lookup(request):
+    """HTMX endpoint: ищет книгу по ISBN через Google Books / Open Library."""
+    isbn = request.GET.get("isbn", "").strip()
+    if len(isbn) < 10:
+        return HttpResponse("")
+    data = lookup_by_isbn(isbn)
+    if not data:
+        return render(request, "books/_isbn_preview.html", {"not_found": True, "isbn": isbn})
 
-def _book_add_context():
-    """Общий контекст для формы добавления книги."""
-    from .models import Genre, Author, Language, Publisher, Series
-    return {
-        "all_genres":      Genre.objects.order_by("name"),
-        "all_authors":     Author.objects.order_by("name"),
-        "all_languages":   Language.objects.order_by("name"),
-        "all_publishers":  Publisher.objects.order_by("name"),
-        "all_series":      Series.objects.order_by("name"),
+    # Матчим авторов из API с авторами в БД
+    author_matches = []  # [{api_name, db_author, exact}]
+    all_authors_qs = Author.objects.order_by("name")
+    for api_name in (data.get("authors") or []):
+        api_lower = api_name.lower().strip()
+        exact = Author.objects.filter(name__iexact=api_name.strip()).first()
+        if exact:
+            author_matches.append({"api_name": api_name, "db_author": exact, "exact": True, "candidates": []})
+        else:
+            # Частичное совпадение — по словам из имени
+            words = [w for w in api_lower.split() if len(w) > 2]
+            from django.db.models import Q as _Q
+            q = _Q()
+            for w in words:
+                q |= _Q(name__icontains=w)
+            candidates = list(Author.objects.filter(q).order_by("name")[:10]) if words else []
+            author_matches.append({"api_name": api_name, "db_author": None, "exact": False, "candidates": candidates})
+
+    # Матчим жанры из API с жанрами в БД
+    genre_matches = []
+    for api_genre in (data.get("genres") or []):
+        exact = Genre.objects.filter(name__iexact=api_genre.strip()).first()
+        if exact:
+            genre_matches.append({"api_name": api_genre, "db_genre": exact, "exact": True, "candidates": []})
+        else:
+            candidates = list(Genre.objects.filter(name__icontains=api_genre.strip()[:20]).order_by("name")[:10])
+            genre_matches.append({"api_name": api_genre, "db_genre": None, "exact": False, "candidates": candidates})
+
+    ctx = {
+        "data": data,
+        "author_matches": author_matches,
+        "genre_matches": genre_matches,
+        "all_authors": all_authors_qs,
+        "all_genres": Genre.objects.order_by("name"),
     }
+    return render(request, "books/_isbn_preview.html", ctx)
 
+# ─── ДОБАВЛЕНИЕ / РЕДАКТИРОВАНИЕ КНИГ (STAFF) ────────────────────────────────
 
-@user_passes_test(lambda u: u.is_staff)
+@staff_required
+@require_http_methods(["GET", "POST"])
 def book_add(request):
-    """Форма добавления книги. GET поддерживает ?copy_from=<pk>."""
-    from .models import Genre, Author, Language, Publisher, Series
-
-    # «Добавить копированием» — предзаполнить данные
     copy_from = None
     form_data = {}
-    selected_author_ids  = "[]"
-    selected_genre_ids   = "[]"
+    selected_author_ids = "[]"
+    selected_genre_ids = "[]"
     selected_publisher_id = None
-    selected_series_id    = None
+    selected_series_id = None
 
     copy_pk = request.GET.get("copy_from") or request.POST.get("copy_from")
     if copy_pk:
         try:
             copy_from = Book.objects.prefetch_related("authors", "genres").get(pk=copy_pk)
             form_data = {
-                "title":            copy_from.title + " (копия)",
-                "isbn":             "",
-                "description":      copy_from.description,
+                "title": copy_from.title + " (копия)",
+                "isbn": "",
+                "description": copy_from.description,
                 "publication_year": copy_from.publication_year,
-                "pages":            copy_from.pages,
-                "language_id":      copy_from.language_id,
-                "publisher_name":   copy_from.publisher.name if copy_from.publisher else "",
-                "series_name":      copy_from.series.name if copy_from.series else "",
+                "pages": copy_from.pages,
+                "language_id": copy_from.language_id,
+                "publisher_name": copy_from.publisher.name if copy_from.publisher else "",
+                "series_name": copy_from.series.name if copy_from.series else "",
             }
-            selected_author_ids    = "[" + ",".join(str(a.pk) for a in copy_from.authors.all()) + "]"
-            selected_genre_ids     = "[" + ",".join(str(g.pk) for g in copy_from.genres.all()) + "]"
-            selected_publisher_id  = copy_from.publisher_id if copy_from.publisher else None
-            selected_series_id     = copy_from.series_id if copy_from.series else None
+            selected_author_ids = "[" + ",".join(str(a.pk) for a in copy_from.authors.all()) + "]"
+            selected_genre_ids = "[" + ",".join(str(g.pk) for g in copy_from.genres.all()) + "]"
+            selected_publisher_id = copy_from.publisher_id
+            selected_series_id = copy_from.series_id
         except Book.DoesNotExist:
             pass
 
     if request.method == "POST":
         title = request.POST.get("title", "").strip()
         if not title:
-            pub_id = request.POST.get("publisher_id", "").strip()
-            ser_id = request.POST.get("series_id", "").strip()
-            ctx = _book_add_context()
+            ctx = _book_form_context()
             ctx.update({
-                "error":               "Название обязательно",
-                "form_data":           request.POST,
-                "copy_from":           copy_from,
+                "error": "Название обязательно",
+                "form_data": request.POST,
+                "copy_from": copy_from,
                 "selected_author_ids": "[" + ",".join(request.POST.getlist("authors")) + "]",
-                "selected_genre_ids":  "[" + ",".join(request.POST.getlist("genres")) + "]",
-                "selected_publisher_id": int(pub_id) if pub_id.isdigit() else None,
-                "selected_series_id":    int(ser_id) if ser_id.isdigit() else None,
+                "selected_genre_ids": "[" + ",".join(request.POST.getlist("genres")) + "]",
+                "selected_publisher_id": request.POST.get("publisher_id") or None,
+                "selected_series_id": request.POST.get("series_id") or None,
             })
             return render(request, "books/book_add.html", ctx)
 
-        # Издательство — сначала пробуем по ID, потом по имени
-        publisher = None
-        publisher_id = request.POST.get("publisher_id", "").strip()
-        publisher_name = request.POST.get("publisher_name", "").strip()
-        if publisher_id and publisher_id.isdigit():
-            publisher = Publisher.objects.filter(pk=publisher_id).first()
-        if not publisher and publisher_name:
-            publisher, _ = Publisher.objects.get_or_create(name=publisher_name)
-
-        # Серия — то же самое
-        series = None
-        series_id = request.POST.get("series_id", "").strip()
-        series_name = request.POST.get("series_name", "").strip()
-        if series_id and series_id.isdigit():
-            series = Series.objects.filter(pk=series_id).first()
-        if not series and series_name:
-            series, _ = Series.objects.get_or_create(name=series_name)
-
-        language_id = request.POST.get("language")
-        language = Language.objects.filter(pk=language_id).first() if language_id else None
+        # Издательство и серия
+        publisher = _get_or_create_publisher(request)
+        series = _get_or_create_series(request)
+        language_pk = request.POST.get("language", "").strip()
+        language = Language.objects.filter(pk=language_pk).first() if language_pk else None
 
         pub_year = request.POST.get("publication_year", "").strip()
-        pages    = request.POST.get("pages", "").strip()
+        pages = request.POST.get("pages", "").strip()
 
         book = Book.objects.create(
             title=title,
@@ -645,7 +692,7 @@ def book_add(request):
             book.save(update_fields=["cover_image"])
 
         author_ids = request.POST.getlist("authors")
-        genre_ids  = request.POST.getlist("genres")
+        genre_ids = request.POST.getlist("genres")
         if author_ids:
             book.authors.set(Author.objects.filter(pk__in=author_ids))
         if genre_ids:
@@ -654,64 +701,43 @@ def book_add(request):
         messages.success(request, f"Книга «{book.title}» добавлена.")
         return redirect("book_detail", pk=book.pk)
 
-    ctx = _book_add_context()
+    ctx = _book_form_context()
     ctx.update({
-        "copy_from":             copy_from,
-        "form_data":             form_data,
-        "selected_author_ids":   selected_author_ids,
-        "selected_genre_ids":    selected_genre_ids,
+        "copy_from": copy_from,
+        "form_data": form_data,
+        "selected_author_ids": selected_author_ids,
+        "selected_genre_ids": selected_genre_ids,
         "selected_publisher_id": selected_publisher_id,
-        "selected_series_id":    selected_series_id,
+        "selected_series_id": selected_series_id,
     })
     return render(request, "books/book_add.html", ctx)
 
-
-@user_passes_test(lambda u: u.is_staff)
+@staff_required
+@require_POST
 def book_edit(request, pk):
-    """POST — сохранить инлайн-редактирование книги."""
-    from .models import Genre, Author, Language, Publisher, Series
     book = get_object_or_404(Book, pk=pk)
-
-    if request.method != "POST":
-        return HttpResponse(status=405)
 
     title = request.POST.get("title", "").strip()
     if not title:
         messages.error(request, "Название не может быть пустым.")
         return redirect("book_detail", pk=pk)
 
-    # Издательство
-    publisher = None
-    pub_id   = request.POST.get("publisher_id", "").strip()
-    pub_name = request.POST.get("publisher_name", "").strip()
-    if pub_id and pub_id.isdigit():
-        publisher = Publisher.objects.filter(pk=pub_id).first()
-    if not publisher and pub_name:
-        publisher, _ = Publisher.objects.get_or_create(name=pub_name)
-
-    # Серия
-    series = None
-    ser_id   = request.POST.get("series_id", "").strip()
-    ser_name = request.POST.get("series_name", "").strip()
-    if ser_id and ser_id.isdigit():
-        series = Series.objects.filter(pk=ser_id).first()
-    if not series and ser_name:
-        series, _ = Series.objects.get_or_create(name=ser_name)
-
-    language_id = request.POST.get("language")
-    language = Language.objects.filter(pk=language_id).first() if language_id else None
+    publisher = _get_or_create_publisher(request)
+    series = _get_or_create_series(request)
+    language_pk = request.POST.get("language", "").strip()
+    language = Language.objects.filter(pk=language_pk).first() if language_pk else None
 
     pub_year = request.POST.get("publication_year", "").strip()
-    pages    = request.POST.get("pages", "").strip()
+    pages = request.POST.get("pages", "").strip()
 
-    book.title            = title
-    book.isbn             = request.POST.get("isbn", "").strip() or None
-    book.description      = request.POST.get("description", "").strip()
+    book.title = title
+    book.isbn = request.POST.get("isbn", "").strip() or None
+    book.description = request.POST.get("description", "").strip()
     book.publication_year = int(pub_year) if pub_year.isdigit() else None
-    book.pages            = int(pages)    if pages.isdigit()    else None
-    book.publisher        = publisher
-    book.series           = series
-    book.language         = language
+    book.pages = int(pages) if pages.isdigit() else None
+    book.publisher = publisher
+    book.series = series
+    book.language = language
     book.save()
 
     if "cover_image" in request.FILES:
@@ -719,140 +745,119 @@ def book_edit(request, pk):
         book.save(update_fields=["cover_image"])
 
     author_ids = request.POST.getlist("authors")
-    genre_ids  = request.POST.getlist("genres")
+    genre_ids = request.POST.getlist("genres")
     book.authors.set(Author.objects.filter(pk__in=author_ids))
     book.genres.set(Genre.objects.filter(pk__in=genre_ids))
 
     messages.success(request, f"Книга «{book.title}» обновлена.")
     return redirect("book_detail", pk=pk)
 
+def _book_form_context():
+    """Общий контекст для формы добавления/редактирования книги."""
+    return {
+        "all_genres": Genre.objects.order_by("name"),
+        "all_authors": Author.objects.order_by("name"),
+        "all_languages": Language.objects.order_by("name"),
+        "all_publishers": Publisher.objects.order_by("name"),
+        "all_series": Series.objects.order_by("name"),
+    }
 
-@user_passes_test(lambda u: u.is_staff)
+def _get_or_create_publisher(request):
+    """Извлекает или создаёт издательство из POST-данных."""
+    pub_id = request.POST.get("publisher_id", "").strip()
+    pub_name = request.POST.get("publisher_name", "").strip()
+    publisher = None
+    if pub_id and pub_id.isdigit():
+        publisher = Publisher.objects.filter(pk=pub_id).first()
+    if not publisher and pub_name:
+        publisher, _ = Publisher.objects.get_or_create(name=pub_name)
+    return publisher
+
+def _get_or_create_series(request):
+    """Извлекает или создаёт серию из POST-данных."""
+    ser_id = request.POST.get("series_id", "").strip()
+    ser_name = request.POST.get("series_name", "").strip()
+    series = None
+    if ser_id and ser_id.isdigit():
+        series = Series.objects.filter(pk=ser_id).first()
+    if not series and ser_name:
+        series, _ = Series.objects.get_or_create(name=ser_name)
+    return series
+
+# ─── INLINE-СОЗДАНИЕ ОБЪЕКТОВ (STAFF) ────────────────────────────────────────
+
+@staff_required
 def author_create_inline(request):
-    """POST — создать автора прямо в форме книги, возвращает JSON."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-    from .models import Author
-    name = request.POST.get("name", "").strip()
-    if not name:
-        return JsonResponse({"error": "Введите имя"}, status=400)
-    author, created = Author.objects.get_or_create(name=name)
-    return JsonResponse({"id": author.pk, "name": author.name, "created": created})
+    return _inline_create(request, Author)
 
-
-@user_passes_test(lambda u: u.is_staff)
+@staff_required
 def genre_create_inline(request):
-    """POST — создать жанр прямо в форме книги, возвращает JSON."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-    from .models import Genre
-    name = request.POST.get("name", "").strip()
-    if not name:
-        return JsonResponse({"error": "Введите название"}, status=400)
-    genre, created = Genre.objects.get_or_create(name=name)
-    return JsonResponse({"id": genre.pk, "name": genre.name, "created": created})
+    return _inline_create(request, Genre)
 
-
-@user_passes_test(lambda u: u.is_staff)
+@staff_required
 def publisher_create_inline(request):
-    """JSON POST — создать издательство прямо в форме книги."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-    from .models import Publisher
-    name = request.POST.get("name", "").strip()
-    if not name:
-        return JsonResponse({"error": "Введите название"}, status=400)
-    publisher, created = Publisher.objects.get_or_create(name=name)
-    return JsonResponse({"id": publisher.pk, "name": publisher.name, "created": created})
+    return _inline_create(request, Publisher)
 
-
-@user_passes_test(lambda u: u.is_staff)
+@staff_required
 def series_create_inline(request):
-    """JSON POST — создать серию прямо в форме книги."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-    from .models import Series
-    name = request.POST.get("name", "").strip()
-    if not name:
-        return JsonResponse({"error": "Введите название"}, status=400)
-    series, created = Series.objects.get_or_create(name=name)
-    return JsonResponse({"id": series.pk, "name": series.name, "created": created})
+    return _inline_create(request, Series)
 
-
-# ── Прогресс чтения ───────────────────────────────────────────────────────────
+# ─── ПРОГРЕСС ЧТЕНИЯ ─────────────────────────────────────────────────────────
 
 @login_required
+@require_POST
 def reading_progress_save(request, pk):
-    """HTMX POST — сохранить текущую страницу."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-    from .models import ReadingProgress
     book = get_object_or_404(Book, pk=pk)
     page = request.POST.get("current_page", "0").strip()
     if not page.isdigit():
-        return HttpResponse(status=400)
+        return HttpResponseBadRequest("Страница должна быть числом")
     page = min(int(page), book.pages or 999999)
     progress, _ = ReadingProgress.objects.update_or_create(
         user=request.user, book=book,
         defaults={"current_page": page},
     )
-    percent = progress.percent()
-    return JsonResponse({"current_page": progress.current_page, "percent": percent})
+    return JsonResponse({"current_page": progress.current_page, "percent": progress.percent()})
 
-
-# ── Цитаты ────────────────────────────────────────────────────────────────────
+# ─── ЦИТАТЫ ───────────────────────────────────────────────────────────────────
 
 @login_required
+@require_POST
 def quote_add(request, pk):
-    """HTMX POST — добавить цитату."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-    from .models import Quote
     book = get_object_or_404(Book, pk=pk)
     text = request.POST.get("text", "").strip()
     if not text:
-        return HttpResponse(status=400)
+        return HttpResponseBadRequest("Текст цитаты обязателен")
     page_raw = request.POST.get("page_number", "").strip()
     page = int(page_raw) if page_raw.isdigit() else None
     Quote.objects.create(user=request.user, book=book, text=text, page_number=page)
     quotes = Quote.objects.filter(book=book).select_related("user")
     return render(request, "books/_quotes.html", {"book": book, "quotes": quotes})
 
-
 @login_required
+@require_POST
 def quote_delete(request, pk, quote_pk):
-    """HTMX POST — удалить свою цитату."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-    from .models import Quote
     book = get_object_or_404(Book, pk=pk)
     get_object_or_404(Quote, pk=quote_pk, user=request.user).delete()
     quotes = Quote.objects.filter(book=book).select_related("user")
     return render(request, "books/_quotes.html", {"book": book, "quotes": quotes})
 
-
+@require_GET
 def quotes_partial(request, pk):
-    """HTMX GET — список цитат книги."""
-    from .models import Quote
-    book   = get_object_or_404(Book, pk=pk)
+    book = get_object_or_404(Book, pk=pk)
     quotes = Quote.objects.filter(book=book).select_related("user")
     return render(request, "books/_quotes.html", {"book": book, "quotes": quotes})
 
-
-# ── Алерт цены ────────────────────────────────────────────────────────────────
+# ─── АЛЕРТ ЦЕНЫ ───────────────────────────────────────────────────────────────
 
 @login_required
+@require_POST
 def price_alert_save(request, pk):
-    """HTMX POST — установить/обновить алерт цены."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-    from .models import PriceAlert
-    book      = get_object_or_404(Book, pk=pk)
+    book = get_object_or_404(Book, pk=pk)
     threshold = request.POST.get("threshold", "").strip().replace(",", ".")
     try:
         threshold = float(threshold)
     except ValueError:
-        return HttpResponse("Некорректное значение", status=400)
+        return HttpResponseBadRequest("Некорректное значение порога")
     PriceAlert.objects.update_or_create(
         user=request.user, book=book,
         defaults={"threshold": threshold, "triggered_at": None},
@@ -860,13 +865,27 @@ def price_alert_save(request, pk):
     alert = PriceAlert.objects.get(user=request.user, book=book)
     return render(request, "books/_price_alert.html", {"book": book, "alert": alert})
 
-
 @login_required
+@require_POST
 def price_alert_delete(request, pk):
-    """HTMX POST — удалить алерт."""
-    if request.method != "POST":
-        return HttpResponse(status=405)
-    from .models import PriceAlert
     book = get_object_or_404(Book, pk=pk)
     PriceAlert.objects.filter(user=request.user, book=book).delete()
     return render(request, "books/_price_alert.html", {"book": book, "alert": None})
+
+# ─── MOOD TAGS ───────────────────────────────────────────────────────────────
+
+@login_required
+@require_POST
+def vote_mood(request, pk, mood_id):
+    """Голосование за mood-тег книги. HTMX partial."""
+    book = get_object_or_404(Book, pk=pk)
+    mood_tag = get_object_or_404(MoodTag, pk=mood_id)
+    bm, created = BookMood.objects.get_or_create(
+        book=book, mood=mood_tag,
+        defaults={"source": "user_vote", "confidence": 0.7, "vote_count": 1},
+    )
+    if not created:
+        bm.vote_count += 1
+        bm.save(update_fields=["vote_count"])
+    moods = BookMood.objects.filter(book=book).select_related("mood").order_by("-confidence", "-vote_count")
+    return render(request, "books/_mood_tags.html", {"book": book, "moods": moods})

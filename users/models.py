@@ -16,6 +16,7 @@ class UserProfile(models.Model):
         max_length=50, blank=True,
         help_text="Заполняется автоматически после /start боту"
     )
+    email_verified  = models.BooleanField(default=False)
     is_blocked      = models.BooleanField(default=False)
     blocked_until   = models.DateTimeField(null=True, blank=True)
 
@@ -52,6 +53,84 @@ class AuthorSubscription(models.Model):
 
     def __str__(self):
         return f"{self.user.username} → {self.author.name}"
+
+
+class Achievement(models.Model):
+    """Достижение пользователя (геймификация)."""
+
+    TYPES = [
+        ("books_10",       "Библиофил: 10 книг в списках"),
+        ("books_50",       "Книжный червь: 50 книг в списках"),
+        ("reviews_5",      "Критик: 5 отзывов"),
+        ("reviews_20",     "Литературовед: 20 отзывов"),
+        ("pages_1000",     "Марафонец: 1 000 страниц"),
+        ("pages_5000",     "Книжный титан: 5 000 страниц"),
+        ("lists_3",        "Коллекционер: 3 списка"),
+        ("subscriptions_5","Фанат: 5 подписок на авторов"),
+    ]
+
+    ICONS = {
+        "books_10": "📚", "books_50": "📖",
+        "reviews_5": "✍️", "reviews_20": "🎓",
+        "pages_1000": "🏃", "pages_5000": "🏆",
+        "lists_3": "📂", "subscriptions_5": "⭐",
+    }
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="achievements")
+    achievement_type = models.CharField(max_length=30, choices=TYPES)
+    earned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "achievement_type"],
+                                    name="achievement_unique")
+        ]
+
+    def __str__(self):
+        return f"{self.user.username}: {self.get_achievement_type_display()}"
+
+    @property
+    def icon(self):
+        return self.ICONS.get(self.achievement_type, "🏅")
+
+
+def check_achievements(user):
+    """Проверить и выдать новые достижения. Вызывать после значимых действий."""
+    from books.models import UserList, ReadingProgress
+    from reviews.models import Review
+
+    earned = set(user.achievements.values_list("achievement_type", flat=True))
+    new = []
+
+    book_count = (
+        UserList.objects.filter(user=user)
+        .values("books").distinct().count()
+    )
+    review_count = Review.objects.filter(user=user, status=Review.APPROVED).count()
+    pages_read = (
+        ReadingProgress.objects.filter(user=user)
+        .aggregate(total=models.Sum("current_page"))["total"] or 0
+    )
+    list_count = UserList.objects.filter(user=user).count()
+    sub_count = AuthorSubscription.objects.filter(user=user).count()
+
+    checks = [
+        ("books_10",        book_count >= 10),
+        ("books_50",        book_count >= 50),
+        ("reviews_5",       review_count >= 5),
+        ("reviews_20",      review_count >= 20),
+        ("pages_1000",      pages_read >= 1000),
+        ("pages_5000",      pages_read >= 5000),
+        ("lists_3",         list_count >= 3),
+        ("subscriptions_5", sub_count >= 5),
+    ]
+
+    for atype, condition in checks:
+        if atype not in earned and condition:
+            Achievement.objects.create(user=user, achievement_type=atype)
+            new.append(atype)
+
+    return new
 
 
 @receiver(post_save, sender=User)

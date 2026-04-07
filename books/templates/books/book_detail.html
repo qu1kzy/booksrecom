@@ -62,12 +62,13 @@
 
   {# Форма охватывает весь контент страницы — поля с name передаются при submit, остальное игнорируется #}
   {% if user.is_staff %}
-  <form method="post" enctype="multipart/form-data" action="{% url 'book_edit' book.pk %}">
+  <form id="book-edit-form" method="post" enctype="multipart/form-data" action="{% url 'book_edit' book.pk %}">
     {% csrf_token %}
     <input type="hidden" name="publisher_id"   :value="selectedPublisherId || ''">
     <input type="hidden" name="publisher_name" :value="selectedPublisherId ? '' : publisherSearch.trim()">
     <input type="hidden" name="series_id"      :value="selectedSeriesId || ''">
     <input type="hidden" name="series_name"    :value="selectedSeriesId ? '' : seriesSearch.trim()">
+  </form>
   {% endif %}
 
   {# Полоска «режим редактирования» — появляется сверху #}
@@ -77,7 +78,7 @@
             margin-bottom:16px;padding:10px 14px;border:1px solid #292929;border-radius:8px;">
         <span style="font-size:13px;color:#000000;">✏ Режим редактирования</span>
         <div>
-          <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
+          <button type="submit" form="book-edit-form" class="btn btn-primary btn-sm">Сохранить</button>
           <button type="button" @click="editing=false" class="btn btn-secondary btn-sm">Отмена</button>
         </div>
       </div>
@@ -106,7 +107,7 @@
       {# Загрузка новой обложки — только в режиме редактирования #}
       {% if user.is_staff %}
       <div x-show="editing" x-cloak style="margin-top:8px;width:140px">
-        <input type="file" name="cover_image" accept="image/*"
+        <input type="file" name="cover_image" form="book-edit-form" accept="image/*"
                style="font-size:11px;color:var(--muted);width:100%">
       </div>
       {% endif %}
@@ -116,12 +117,16 @@
     <div style="flex:1;min-width:200px">
 
       {# Жанры — вид: чипы | ред: мультиселект #}
-      <div x-show="!editing" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+      <div x-show="!editing" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
         {% for g in book.genres.all %}<span class="tag">{{ g.name }}</span>{% endfor %}
+      </div>
+      {# Mood-теги #}
+      <div x-show="!editing">
+        {% include "books/_mood_tags.html" with moods=book.moods.all %}
       </div>
       {% if user.is_staff %}
       <div x-show="editing" x-cloak style="margin-bottom:10px">
-        {% include "books/_multi_select_widget.html" with widget_type="genres" label="Жанры" search_placeholder="Поиск жанра..." new_placeholder="Новый жанр" new_btn_label="+ Жанр" create_fn="createGenre" search_model="genreSearch" selected_model="selectedGenres"  new_name_model="newGenreName" show_new_model="showNewGenre" new_list_model="newGenresList" items=all_genres %}
+        {% include "books/_multi_select_widget.html" with widget_type="genres" label="Жанры" search_placeholder="Поиск жанра..." new_placeholder="Новый жанр" new_btn_label="+ Жанр" create_fn="createGenre" search_model="genreSearch" selected_model="selectedGenres"  new_name_model="newGenreName" show_new_model="showNewGenre" new_list_model="newGenresList" items=all_genres form_id="book-edit-form" %}
       </div>
       {% endif %}
 
@@ -132,7 +137,7 @@
             style="font-size:26px;margin-bottom:6px;flex:1;min-width:0">{{ book.title }}</h1>
         {% if user.is_staff %}
         <input x-show="editing" x-cloak
-               class="form-input" type="text" name="title" required
+               class="form-input" type="text" name="title" form="book-edit-form" required
                value="{{ book.title }}"
                style="font-size:22px;font-family:'Mltsvfont';
                       font-weight:400;flex:1;min-width:0;margin-bottom:6px">
@@ -152,7 +157,7 @@
 </p>
       {% if user.is_staff %}
       <div x-show="editing" x-cloak style="margin-top:8px">
-        {% include "books/_multi_select_widget.html" with widget_type="authors" label="Авторы" search_placeholder="Поиск автора..." new_placeholder="Новый автор" new_btn_label="+ Автор" create_fn="createAuthor" search_model="authorSearch" selected_model="selectedAuthors" new_name_model="newAuthorName" show_new_model="showNewAuthor" new_list_model="newAuthorsList" items=all_authors %}
+        {% include "books/_multi_select_widget.html" with widget_type="authors" label="Авторы" search_placeholder="Поиск автора..." new_placeholder="Новый автор" new_btn_label="+ Автор" create_fn="createAuthor" search_model="authorSearch" selected_model="selectedAuthors" new_name_model="newAuthorName" show_new_model="showNewAuthor" new_list_model="newAuthorsList" items=all_authors form_id="book-edit-form" %}
       </div>
       {% endif %}
 
@@ -174,6 +179,21 @@
     <div id="book-list-dropdown-{{ book.id }}">
       {% include "books/_list_dropdown.html" with book=book user_lists=user_lists book_list_ids=book_list_ids %}
     </div>
+
+    {# Рекомендовать другу #}
+    <div x-data="{ recOpen: false }" style="position:relative">
+      <button class="btn btn-secondary btn-sm" @click="recOpen = !recOpen">Рекомендовать</button>
+      <div x-show="recOpen" x-cloak @click.outside="recOpen = false"
+           style="position:absolute;top:calc(100% + 4px);right:0;z-index:200;width:300px;
+                  background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
+                  box-shadow:0 4px 16px rgba(0,0,0,.08);padding:16px"
+           hx-get="{% url 'recommend_friends_partial' book.pk %}"
+           hx-trigger="intersect once"
+           hx-swap="innerHTML">
+        <span class="spinner"></span>
+      </div>
+      <div id="recommend-result-{{ book.pk }}"></div>
+    </div>
     {% endif %}
     <div id="price-block-{{ book.id }}" style="margin-left:auto">
       {% include "books/_price_block.html" with book=book pending=False %}
@@ -188,6 +208,14 @@
   {% if book.pages %}
   <div style="margin-bottom:10px">
     {% include "books/_reading_progress.html" with book=book progress=reading_progress %}
+  </div>
+  {% endif %}
+
+  {% if reading_prediction and reading_prediction.confidence != "low" %}
+  <div style="margin-bottom:10px;padding:8px 12px;background:var(--surface);border-radius:6px;
+              font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px"
+       title="На основе вашей скорости: {{ reading_prediction.pace_pages_per_day }} стр/день (по {{ reading_prediction.based_on_books }} книгам)">
+    ⏱ Вы прочтёте за ~<b style="color:var(--ink)">{{ reading_prediction.days }}</b> дн.
   </div>
   {% endif %}
 
@@ -220,7 +248,7 @@
       {% if user.is_staff %}
       <div x-show="editing" x-cloak>
         <label class="form-label">Описание</label>
-        <textarea class="form-input" name="description" rows="6"
+        <textarea class="form-input" name="description" form="book-edit-form" rows="6"
                   style="max-width:620px">{{ book.description }}</textarea>
       </div>
       {% endif %}
@@ -241,22 +269,22 @@
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;max-width:620px">
           <div>
             <label class="form-label">Год публикации</label>
-            <input class="form-input" type="number" name="publication_year"
+            <input class="form-input" type="number" name="publication_year" form="book-edit-form"
                    value="{{ book.publication_year|default:'' }}" max="2100" placeholder="2024">
           </div>
           <div>
             <label class="form-label">Страниц</label>
-            <input class="form-input" type="number" name="pages"
+            <input class="form-input" type="number" name="pages" form="book-edit-form"
                    value="{{ book.pages|default:'' }}" min="1" placeholder="350">
           </div>
           <div>
             <label class="form-label">ISBN</label>
-            <input class="form-input" type="text" name="isbn"
+            <input class="form-input" type="text" name="isbn" form="book-edit-form"
                    value="{{ book.isbn|default:'' }}" placeholder="978-...">
           </div>
           <div>
             <label class="form-label">Язык</label>
-            <select class="form-input" name="language">
+            <select class="form-input" name="language" form="book-edit-form">
               <option value="">— Выбрать —</option>
               {% for lang in all_languages %}
               <option value="{{ lang.pk }}" {% if book.language_id == lang.pk %}selected{% endif %}>{{ lang.name }}</option>
@@ -365,7 +393,13 @@
     </div>
   </div>{# /tabs x-data #}
 
-  {% if user.is_staff %}</form>{% endif %}
+  {# Граф связей и AI-чат #}
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:24px">
+    <a href="{% url 'book_graph' book.pk %}" class="btn btn-secondary btn-sm">Граф связей</a>
+    {% if user.is_authenticated %}
+      <a href="{% url 'book_chat' book.pk %}" class="btn btn-secondary btn-sm">AI-собеседник</a>
+    {% endif %}
+  </div>
 
   {# Похожие книги #}
   {% if similar %}
